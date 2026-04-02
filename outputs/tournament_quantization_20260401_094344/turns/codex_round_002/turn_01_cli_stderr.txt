@@ -1,0 +1,2107 @@
+Reading additional input from stdin...
+OpenAI Codex v0.118.0 (research preview)
+--------
+workdir: /tmp/crucible_0z3zkbcf
+model: gpt-5.3-codex
+provider: openai
+approval: never
+sandbox: danger-full-access
+reasoning effort: medium
+reasoning summaries: none
+session id: 019d49f8-3ee2-75c2-8cda-ef49aaf8e0c2
+--------
+user
+You are a quantization researcher competing in a tournament.
+
+Your task: quantize Qwen/Qwen3-4B (4.02B params, 8.04 GB fp16) while preserving
+text generation quality. The model is a dense transformer for text-generation.
+
+TARGET GPU: NVIDIA RTX 3090 (24GB VRAM, CUDA)
+
+MODEL ARCHITECTURE:
+- Hidden: 2560, Layers: 36, Heads: 32 (8 KV heads, GQA), Intermediate: 9728
+- Vocab: 151,936, Context: 40,960
+- SwiGLU activation, RoPE positional encoding
+- FP16 reference size: 8,044,936,192 bytes
+
+YOUR SOLUTION (solution.py) MUST define:
+1. load_model(device="cuda") -> model  OR  a Model class
+   - Must accept input_ids tensor and return logits (or object with .logits)
+   - Same interface as: model(input_ids) -> logits of shape (B, T, vocab_size)
+2. get_compressed_size() -> int
+   - Actual compressed model size in bytes
+   - Must be LESS than 8,044,936,192 (the fp16 reference)
+   - Must be HONEST -- reflects real bits used, not a fabricated number
+   - Compression ratio capped at 32x (anything higher is rejected)
+
+EVALUATION:
+- Perplexity on held-out English passages (science, history, math, biology, tech, etc.)
+- Quality = exp(-max(0, (sol_ppl - ref_ppl) / ref_ppl))
+  Even a 10% perplexity increase gives quality = exp(-0.1) = 0.905
+  A 50% increase gives quality = exp(-0.5) = 0.607
+- Fitness = quality * log2(compression_ratio)
+- Models are loaded SEQUENTIALLY (ref first, then solution) to fit in 24GB
+
+APPROACHES TO CONSIDER:
+- GPTQ: second-order weight quantization, state-of-the-art for 4-bit
+  pip install auto-gptq optimum
+- AWQ: activation-aware weight quantization, fast inference
+  pip install autoawq
+- bitsandbytes: NF4/INT8 quantization, easy to use
+  pip install bitsandbytes
+- Custom schemes: per-channel scales, mixed precision across layers,
+  outlier-aware quantization, entropy coding, pruning + quantization
+- Sensitivity analysis: attention layers (especially Q/K) are typically more
+  sensitive than MLP layers. Embeddings and LM head are often robust to
+  lower precision.
+
+ANALYSIS STEPS (do these first):
+1. Read reference.py -- understand architecture and helpers
+2. Run: python -c "import reference; import json; print(json.dumps(reference.get_model_config(), indent=2))"
+3. Analyze per-layer weight distributions if time permits
+4. Choose quantization strategy based on target compression ratio
+5. Implement in solution.py
+6. Test: python _evaluate.py
+7. Submit when satisfied
+
+CRITICAL: Before submitting, make sure your solution works end-to-end:
+1. Run your quantization script to generate compressed weight files
+2. Verify load_model() works with those saved files
+3. Run: python _evaluate.py  (this loads ref model, measures ref perplexity, then loads
+   your solution and measures its perplexity -- both must fit in 24GB sequentially)
+4. Only submit after _evaluate.py prints valid JSON output
+
+The evaluation loads your solution fresh -- if your quantized weights aren't saved to disk,
+they'll need to be regenerated during evaluation (which may timeout at 600s).
+
+TOOLS: read_file, write_file, edit_file, bash, submit
+Do NOT modify reference.py or _evaluate.py.
+
+
+---
+
+Round 2 of the quantization tournament.
+
+Target: Qwen/Qwen3-4B (4.02B params, 8.04 GB fp16, dense text-generation).
+Quantize it while preserving perplexity on held-out English text.
+Fitness = quality * log2(compression_ratio).
+
+First round -- no prior solutions.
+
+Recommended starting approach:
+1. Read reference.py to understand the model interface
+2. Try GPTQ 4-bit as a strong baseline:
+   pip install auto-gptq optimum
+   This gives ~4x compression with minimal quality loss
+3. If that works, explore: 3-bit GPTQ, mixed-precision, AWQ, custom schemes
+4. Test with: python _evaluate.py
+5. Submit when ready
+
+2026-04-01T16:54:59.678887Z ERROR rmcp::transport::worker: worker quit with fatal: Transport channel closed, when AuthRequired(AuthRequiredError { www_authenticate_header: "Bearer resource_metadata=\"/.well-known/oauth-protected-resource\"" })
+codex
+I’ll inspect the repo and baseline evaluation flow first, then implement a quantized `solution.py` that loads fast from disk and reports an honest compressed byte size. After that I’ll run lint/tests and `_evaluate.py` end-to-end.
+exec
+/usr/bin/zsh -lc 'git status --short && git branch --show-current && git log --oneline -n 5' in /tmp/crucible_0z3zkbcf
+ succeeded in 0ms:
+?? _evaluate.py
+?? prior_best.py
+?? reference.py
+master
+5da4a4c init
+
+exec
+/usr/bin/zsh -lc 'pwd && ls -la' in /tmp/crucible_0z3zkbcf
+ succeeded in 0ms:
+/tmp/crucible_0z3zkbcf
+total 164
+drwx------  3 infatoshi infatoshi   4096 Apr  1 10:54 .
+drwxrwxrwt 60 root      root      126976 Apr  1 10:54 ..
+drwxrwxr-x  8 infatoshi infatoshi   4096 Apr  1 10:55 .git
+-rw-rw-r--  1 infatoshi infatoshi  14060 Apr  1 10:54 _evaluate.py
+-rw-rw-r--  1 infatoshi infatoshi   5194 Apr  1 10:54 prior_best.py
+-rw-rw-r--  1 infatoshi infatoshi   2049 Apr  1 10:54 reference.py
+
+exec
+/usr/bin/zsh -lc 'uv --version && uv run python -V && df -h .' in /tmp/crucible_0z3zkbcf
+ succeeded in 0ms:
+uv 0.10.12 (x86_64-unknown-linux-gnu)
+Python 3.11.15
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/nvme0n1p2  3.6T  487G  3.0T  14% /
+
+codex
+I’ve confirmed the environment and repo state. Next I’m reading `reference.py` and querying the model config so the solution matches the required interface exactly.
+exec
+/usr/bin/zsh -lc "sed -n '1,260p' reference.py" in /tmp/crucible_0z3zkbcf
+ succeeded in 0ms:
+
+"""Reference: Qwen/Qwen3-4B (dense, 4.02B params, text-generation).
+
+Do NOT modify this file.
+
+Model specs:
+- Architecture: Qwen3 dense transformer (GQA, SwiGLU, RoPE)
+- Parameters: 4,022,468,096
+- FP16 size: 8,044,936,192 bytes (8.04 GB)
+- Hidden: 2560, Layers: 36, Heads: 32 (8 KV), Intermediate: 9728
+- Vocab: 151,936 tokens, Max context: 40,960 tokens
+"""
+import torch
+from transformers import AutoModelForCausalLM, AutoTokenizer
+
+MODEL_ID = "Qwen/Qwen3-4B"
+REF_BYTES = 8_044_936_192
+
+def load_model(device="cuda"):
+    """Load reference model in fp16."""
+    model = AutoModelForCausalLM.from_pretrained(
+        MODEL_ID, dtype=torch.float16, device_map=device
+    )
+    model.eval()
+    return model
+
+def load_tokenizer():
+    return AutoTokenizer.from_pretrained(MODEL_ID)
+
+def get_ref_bytes():
+    return REF_BYTES
+
+def get_model_config():
+    """Architecture details for sensitivity analysis."""
+    return {
+        "hidden_size": 2560,
+        "num_hidden_layers": 36,
+        "num_attention_heads": 32,
+        "num_key_value_heads": 8,
+        "intermediate_size": 9728,
+        "vocab_size": 151936,
+        "max_position_embeddings": 40960,
+        "total_params": 4_022_468_096,
+        "fp16_bytes": 8_044_936_192,
+    }
+
+def get_layer_sizes():
+    """Per-layer parameter counts and bytes (fp16) for mixed-precision planning."""
+    model = AutoModelForCausalLM.from_pretrained(MODEL_ID, dtype=torch.float16)
+    layers = {}
+    for name, p in model.named_parameters():
+        # Group by layer
+        parts = name.split(".")
+        if "layers" in parts:
+            idx = parts.index("layers")
+            group = f"layers.{parts[idx+1]}.{parts[idx+2]}"
+        else:
+            group = parts[0] if len(parts) > 1 else name
+        if group not in layers:
+            layers[group] = {"params": 0, "bytes": 0, "shapes": []}
+        layers[group]["params"] += p.numel()
+        layers[group]["bytes"] += p.numel() * p.element_size()
+        layers[group]["shapes"].append((name, list(p.shape)))
+    del model
+    return layers
+
+exec
+/usr/bin/zsh -lc 'uv run python -c "import reference, json; print(json.dumps(reference.get_model_config(), indent=2))"' in /tmp/crucible_0z3zkbcf
+ exited 1 in 0ms:
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+  File "/tmp/crucible_0z3zkbcf/reference.py", line 13, in <module>
+    import torch
+ModuleNotFoundError: No module named 'torch'
+
+codex
+`torch` isn’t installed yet, so I’ll inspect `_evaluate.py` and then install the minimal dependencies with `uv` before implementing quantization.
+exec
+/usr/bin/zsh -lc "sed -n '1,280p' _evaluate.py" in /tmp/crucible_0z3zkbcf
+ succeeded in 0ms:
+
+"""Evaluate quantization quality on Qwen3-4B.
+
+Loads reference and solution models SEQUENTIALLY to fit in 24GB VRAM.
+Computes perplexity on held-out English passages.
+
+Quality = exp(-max(0, delta_ppl_norm)) where delta_ppl_norm = (sol_ppl - ref_ppl) / ref_ppl
+Fitness = quality * log2(compression_ratio)
+"""
+import gc
+import importlib.util
+import json
+import math
+import sys
+import torch
+import torch.nn.functional as F
+from transformers import AutoTokenizer
+
+MODEL_ID = "Qwen/Qwen3-4B"
+REF_BYTES = 8_044_936_192
+
+EVAL_TEXTS = ["The discovery of gravitational waves in 2015 confirmed a major prediction of Einstein's general theory of relativity. The Laser Interferometer Gravitational-Wave Observatory, known as LIGO, detected ripples in spacetime caused by the merger of two black holes approximately 1.3 billion light-years away. Each black hole was roughly 30 times the mass of our Sun, and their collision released more energy than all the stars in the observable universe combined, albeit in the form of gravitational radiation rather than light. The signal lasted less than a second but carried information about the final moments before the merger. This achievement required decades of technological development, including mirrors polished to atomic smoothness and laser beams split and recombined with extraordinary precision. The detection opened an entirely new window on the universe, complementing electromagnetic observations with a fundamentally different kind of information about cosmic events.", "The printing press, developed by Johannes Gutenberg around 1440, transformed European society in ways that took centuries to fully manifest. Before movable type, books were copied by hand in monastic scriptoria, making each volume expensive and rare. A single Bible might take a scribe two years to produce. Gutenberg's innovation allowed hundreds of identical copies to be printed in the time previously needed for one. Within fifty years of the first printed Bible, an estimated twenty million volumes had been produced across Europe. Literacy rates began climbing as books became affordable for merchants and artisans, not just clergy and nobility. The standardization of texts reduced the gradual corruption that crept into hand-copied manuscripts, while the ability to widely distribute identical editions enabled scholars in different cities to reference the same page and line of a work. The Protestant Reformation, the Scientific Revolution, and the Enlightenment all depended in part on this technology of mass communication.", 'The prime numbers have fascinated mathematicians for over two thousand years, yet fundamental questions about their distribution remain open. Euclid proved around 300 BCE that there are infinitely many primes, using an elegant argument by contradiction. If you assume a finite list of all primes and multiply them together, then add one, the result is either prime itself or divisible by a prime not on your list. The prime number theorem, proved independently by Hadamard and de la Vallee Poussin in 1896, established that the number of primes less than n is approximately n divided by the natural logarithm of n. The Riemann hypothesis, proposed in 1859 and still unproved, makes a much more precise claim about the distribution of primes by connecting them to the zeros of a complex-valued function. A proof would have profound implications not only for number theory but also for cryptography, since the security of RSA encryption depends on the practical difficulty of factoring large numbers into their prime components.', 'CRISPR-Cas9 gene editing technology, adapted from a bacterial immune system, has revolutionized molecular biology since its development as a genome editing tool in 2012. Bacteria use CRISPR sequences as a memory of past viral infections, storing short segments of viral DNA that can be recognized during future encounters. The Cas9 protein acts as molecular scissors, guided by a short RNA sequence to cut DNA at a precise location. Jennifer Doudna and Emmanuelle Charpentier demonstrated that this system could be reprogrammed to cut any DNA sequence by changing the guide RNA, earning them the 2020 Nobel Prize in Chemistry. The technology has since been used to correct genetic mutations in human cells, engineer disease-resistant crops, create gene drives in mosquitoes to combat malaria, and develop new diagnostic tests for infectious diseases. Ethical debates continue about the boundaries of human germline editing, particularly after a Chinese researcher controversially edited the genomes of twin embryos in 2018.', 'Modern semiconductor fabrication operates at scales that challenge intuition. The transistors in a contemporary processor are measured in nanometers, where a nanometer is one billionth of a meter, roughly the width of a few atoms. A single chip may contain over 100 billion transistors packed into an area smaller than a fingernail. Manufacturing these devices requires extreme ultraviolet lithography, which uses light with a wavelength of just 13.5 nanometers to pattern features onto silicon wafers. The light source works by firing a high-powered laser at tiny tin droplets, each about 25 micrometers in diameter, dropped at a rate of 50,000 per second. The resulting plasma emits EUV radiation that is collected by specialized mirrors and focused through a series of optics. Each mirror must be polished to sub-atomic smoothness, with surface irregularities measuring less than the diameter of a single atom. The machines that perform this process cost roughly 400 million dollars each and weigh over 180 tons.', 'The relationship between inflation and unemployment, described by the Phillips curve, has been one of the most debated topics in macroeconomics since A.W. Phillips published his empirical finding in 1958. The original observation was straightforward: when unemployment was low, wages tended to rise faster, pushing up prices. Policymakers initially interpreted this as a stable tradeoff, suggesting they could choose their preferred combination of inflation and unemployment. This view was challenged in the late 1960s by Milton Friedman and Edmund Phelps, who argued that any attempt to maintain unemployment below its natural rate would lead to accelerating inflation as workers adjusted their expectations. The stagflation of the 1970s, with simultaneous high inflation and high unemployment, appeared to confirm their critique. More recent research has noted that the Phillips curve has flattened considerably since the 1990s, with large changes in unemployment producing only modest effects on inflation, a puzzle that central bankers continue to grapple with.', 'The problem of consciousness remains one of the deepest unsolved questions in philosophy and neuroscience. David Chalmers formalized the distinction between easy and hard problems of consciousness in 1995. The easy problems, though scientifically challenging, involve explaining cognitive functions like attention, memory consolidation, and behavioral responses to stimuli. The hard problem asks why and how physical processes in the brain give rise to subjective experience at all. When you see the color red, there is something it is like to have that experience, a qualitative character that seems to resist explanation in purely physical terms. Some philosophers, like Daniel Dennett, argue that the hard problem is an illusion generated by our confused intuitions about the nature of mind. Others, like Chalmers himself, suggest that consciousness may be a fundamental feature of reality, not reducible to physical processes. Neuroscientific approaches such as integrated information theory and global workspace theory attempt to bridge the gap by identifying neural correlates of consciousness, but whether correlation implies explanation remains contested.', 'Bridge design illustrates the tension between efficiency and redundancy in structural engineering. A simply supported beam bridge is the most intuitive form, with the deck resting on supports at each end, but it becomes impractical for spans beyond about 80 meters because the bending moments grow with the square of the span length. Truss bridges address this by distributing forces through a network of triangular elements, where each member carries either pure tension or pure compression. Suspension bridges can cross much greater distances by hanging the deck from cables draped over tall towers, with the main cables transferring the load to massive anchorages. The Golden Gate Bridge spans 1,280 meters with cables containing 80,000 miles of wire. Cable-stayed bridges use a different approach, running cables directly from the towers to the deck in a fan or harp pattern. Modern computational methods allow engineers to optimize material usage through finite element analysis, but experienced designers know that structural elegance and constructability matter as much as mathematical optimality.']
+
+MAX_SEQ_LEN = 512  # Truncate to this length for evaluation
+
+
+def load_module(name, path):
+    spec = importlib.util.spec_from_file_location(name, path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def compute_perplexity(model, input_ids_list, device):
+    """Compute perplexity across multiple sequences."""
+    total_loss = 0.0
+    total_tokens = 0
+    for input_ids in input_ids_list:
+        ids = input_ids[:MAX_SEQ_LEN].unsqueeze(0).to(device)
+        with torch.no_grad():
+            outputs = model(ids)
+            # Handle both raw logits and model output objects
+            logits = outputs.logits if hasattr(outputs, "logits") else outputs
+            # Next-token prediction: logits[:-1] predicts tokens[1:]
+            shift_logits = logits[:, :-1, :].contiguous()
+            shift_labels = ids[:, 1:].contiguous()
+            loss = F.cross_entropy(
+                shift_logits.view(-1, shift_logits.size(-1)).float(),
+                shift_labels.view(-1),
+                reduction="sum",
+            )
+        total_loss += loss.item()
+        total_tokens += shift_labels.numel()
+    avg_loss = total_loss / total_tokens
+    return math.exp(avg_loss)
+
+
+try:
+    device = torch.device("cuda:0")
+    tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
+
+    # Tokenize eval texts
+    input_ids_list = []
+    for text in EVAL_TEXTS:
+        ids = tokenizer.encode(text, return_tensors="pt", add_special_tokens=False)[0]
+        if len(ids) > 2:  # Skip degenerate sequences
+            input_ids_list.append(ids)
+
+    if not input_ids_list:
+        print(json.dumps({"fitness": 0.0, "error": "No valid eval sequences"}))
+        sys.exit(0)
+
+    total_eval_tokens = sum(len(ids) for ids in input_ids_list)
+
+    # ---- Phase 1: Reference model perplexity ----
+    ref = load_module("reference", "reference.py")
+    ref_model = ref.load_model(device=device)
+    ref_ppl = compute_perplexity(ref_model, input_ids_list, device)
+    del ref_model, ref
+    gc.collect()
+    torch.cuda.empty_cache()
+
+    # ---- Phase 2: Solution model ----
+    sol = load_module("solution", "solution.py")
+
+    if not hasattr(sol, "get_compressed_size"):
+        print(json.dumps({
+            "fitness": 0.0,
+            "error": "Solution must define get_compressed_size() -> int"
+        }))
+        sys.exit(0)
+
+    # Load solution model
+    if hasattr(sol, "load_model"):
+        sol_model = sol.load_model(device=device)
+    elif hasattr(sol, "Model"):
+        sol_model = sol.Model()
+        if hasattr(sol_model, "to"):
+            sol_model = sol_model.to(device)
+        sol_model.eval()
+    else:
+        print(json.dumps({
+            "fitness": 0.0,
+            "error": "Solution must define load_model(device) or Model class"
+        }))
+        sys.exit(0)
+
+    sol_bytes = sol.get_compressed_size()
+
+    if not isinstance(sol_bytes, (int, float)) or sol_bytes <= 0:
+        print(json.dumps({
+            "fitness": 0.0,
+            "error": f"get_compressed_size() must return positive number, got {sol_bytes}"
+        }))
+        sys.exit(0)
+
+    sol_bytes = int(sol_bytes)
+
+    if sol_bytes >= REF_BYTES:
+        print(json.dumps({
+            "fitness": 0.0,
+            "error": f"No compression: sol_bytes={sol_bytes} >= ref_bytes={REF_BYTES}",
+        }))
+        sys.exit(0)
+
+    compression_ratio = REF_BYTES / sol_bytes
+
+    # Sanity: compression > 32x is suspicious for a 4B model
+    if compression_ratio > 32:
+        print(json.dumps({
+            "fitness": 0.0,
+            "error": f"Compression ratio {compression_ratio:.1f}x exceeds 32x cap -- likely dishonest size claim",
+        }))
+        sys.exit(0)
+
+    sol_ppl = compute_perplexity(sol_model, input_ids_list, device)
+
+    # Check for degenerate output
+    if math.isnan(sol_ppl) or math.isinf(sol_ppl) or sol_ppl > 1e6:
+        print(json.dumps({
+            "fitness": 0.0,
+            "error": f"Degenerate perplexity: {sol_ppl}",
+            "ref_ppl": round(ref_ppl, 4),
+        }))
+        sys.exit(0)
+
+    # Quality = exp(-max(0, normalized ppl increase))
+    # Normalized by ref_ppl so the scale is relative, not absolute
+    delta_ppl_norm = (sol_ppl - ref_ppl) / ref_ppl
+    quality = math.exp(-max(0.0, delta_ppl_norm))
+    quality = min(quality, 1.0)  # Cap at 1.0
+
+    # Fitness = quality * log2(compression_ratio)
+    fitness = quality * math.log2(max(compression_ratio, 1.01))
+
+    del sol_model, sol
+    gc.collect()
+    torch.cuda.empty_cache()
+
+    print(json.dumps({
+        "fitness": round(fitness, 6),
+        "quality": round(quality, 6),
+        "compression_ratio": round(compression_ratio, 4),
+        "ref_ppl": round(ref_ppl, 4),
+        "sol_ppl": round(sol_ppl, 4),
+        "delta_ppl_pct": round(delta_ppl_norm * 100, 2),
+        "ref_bytes": REF_BYTES,
+        "sol_bytes": sol_bytes,
+        "eval_tokens": total_eval_tokens,
+    }))
+
+except Exception as e:
+    import traceback
+    print(json.dumps({
+        "fitness": 0.0,
+        "error": str(e),
+        "traceback": traceback.format_exc()[:2000],
+    }))
+
+exec
+/usr/bin/zsh -lc "sed -n '1,280p' prior_best.py" in /tmp/crucible_0z3zkbcf
+ succeeded in 0ms:
+"""Qwen3-4B: NF4 for linear layers + INT4 per-group for embeddings/lm_head."""
+
+import torch
+import torch.nn as nn
+from transformers import AutoModelForCausalLM, BitsAndBytesConfig
+
+MODEL_ID = "Qwen/Qwen3-4B"
+EMBED_GROUP_SIZE = 128
+
+
+def quantize_to_int4(weight, group_size=EMBED_GROUP_SIZE):
+    """Quantize weight to symmetric INT4 with per-group scales. Returns packed uint8."""
+    rows, cols = weight.shape
+    assert cols % group_size == 0
+    num_groups = cols // group_size
+
+    grouped = weight.reshape(rows, num_groups, group_size)
+    scales = grouped.abs().amax(dim=-1, keepdim=True) / 7.0
+    scales = scales.clamp(min=1e-8)
+
+    quant = (grouped / scales).round().clamp(-8, 7)
+    quant = (quant + 8).to(torch.uint8)  # shift to [0, 15]
+    quant = quant.reshape(rows, cols)
+
+    # Pack two 4-bit values per uint8 byte
+    packed = quant[:, 0::2] | (quant[:, 1::2] << 4)  # [rows, cols//2]
+
+    return packed, scales.squeeze(-1).half()  # [rows, num_groups]
+
+
+def dequantize_int4(packed, scales, hidden_size, group_size=EMBED_GROUP_SIZE):
+    """Unpack and dequantize INT4 packed weights."""
+    dtype = scales.dtype
+    low = (packed & 0xF).to(dtype) - 8.0
+    high = ((packed >> 4) & 0xF).to(dtype) - 8.0
+    unpacked = torch.stack([low, high], dim=-1).reshape(*packed.shape[:-1], -1)
+
+    num_groups = hidden_size // group_size
+    unpacked = unpacked.reshape(*unpacked.shape[:-1], num_groups, group_size)
+    result = unpacked * scales.unsqueeze(-1) if scales.dim() < unpacked.dim() else unpacked * scales[..., :, None]
+
+    return result.reshape(*packed.shape[:-1], hidden_size)
+
+
+class INT4Embedding(nn.Module):
+    def __init__(self, packed_weight, scales, hidden_size):
+        super().__init__()
+        self.register_buffer('packed_weight', packed_weight)
+        self.register_buffer('scales', scales)
+        self.hidden_size = hidden_size
+
+    def forward(self, input_ids):
+        packed = self.packed_weight[input_ids]
+        scales = self.scales[input_ids]
+        return dequantize_int4(packed, scales, self.hidden_size)
+
+
+class INT4LMHead(nn.Module):
+    def __init__(self, packed_weight, scales, hidden_size, vocab_size):
+        super().__init__()
+        self.register_buffer('packed_weight', packed_weight)
+        self.register_buffer('scales', scales)
+        self.hidden_size = hidden_size
+        self.vocab_size = vocab_size
+
+    def forward(self, x):
+        orig_shape = x.shape[:-1]
+        x_flat = x.reshape(-1, x.shape[-1])
+        dtype = x.dtype
+
+        chunk_size = 32768
+        outputs = []
+        for i in range(0, self.vocab_size, chunk_size):
+            end = min(i + chunk_size, self.vocab_size)
+            w_deq = dequantize_int4(
+                self.packed_weight[i:end], self.scales[i:end], self.hidden_size
+            )
+            outputs.append(x_flat @ w_deq.to(dtype).T)
+
+        result = torch.cat(outputs, dim=-1)
+        return result.reshape(*orig_shape, self.vocab_size)
+
+
+def load_model(device="cuda"):
+    """Load model with NF4 linear layers and INT4 embeddings."""
+    bnb_config = BitsAndBytesConfig(
+        load_in_4bit=True,
+        bnb_4bit_quant_type="nf4",
+        bnb_4bit_compute_dtype=torch.float16,
+        bnb_4bit_use_double_quant=True,
+    )
+    model = AutoModelForCausalLM.from_pretrained(
+        MODEL_ID,
+        quantization_config=bnb_config,
+        device_map=device,
+    )
+    model.eval()
+
+    # Quantize embedding to INT4 per-group
+    embed_weight = model.model.embed_tokens.weight.data.cpu().float()
+    packed, scales = quantize_to_int4(embed_weight)
+    del embed_weight
+
+    hidden_size = model.config.hidden_size
+    vocab_size = model.config.vocab_size
+
+    model.model.embed_tokens = INT4Embedding(
+        packed.to(device), scales.to(device), hidden_size
+    )
+    model.lm_head = INT4LMHead(
+        packed.to(device), scales.to(device), hidden_size, vocab_size
+    )
+
+    return model
+
+
+def get_compressed_size():
+    """Actual compressed size: NF4 linears + INT4 embeddings + fp16 norms."""
+    hidden = 2560
+    layers = 36
+    heads = 32
+    kv_heads = 8
+    intermediate = 9728
+    vocab = 151936
+    head_dim = hidden // heads
+
+    # NF4 linear layers
+    q_params = hidden * heads * head_dim
+    k_params = hidden * kv_heads * head_dim
+    v_params = hidden * kv_heads * head_dim
+    o_params = heads * head_dim * hidden
+    attn_params = q_params + k_params + v_params + o_params
+    mlp_params = 3 * hidden * intermediate
+    total_quantized = (attn_params + mlp_params) * layers
+
+    block_size = 64
+    bytes_per_quant = 0.5
+    scale_per_param = 1.0 / block_size
+    nested_scale = 4.0 / (block_size * 256)
+    nf4_bytes = int(total_quantized * (bytes_per_quant + scale_per_param + nested_scale))
+
+    # INT4 embedding per-group (group_size=128)
+    embed_params = vocab * hidden
+    int4_embed_bytes = embed_params // 2  # 4 bits packed
+    num_groups = vocab * (hidden // EMBED_GROUP_SIZE)
+    embed_scale_bytes = num_groups * 2  # fp16 scales
+    embed_total = int4_embed_bytes + embed_scale_bytes
+
+    # FP16 norms
+    norm_params = layers * (2 * hidden + 2 * head_dim) + hidden
+    norm_bytes = norm_params * 2
+
+    return nf4_bytes + embed_total + norm_bytes
+
+exec
+/usr/bin/zsh -lc 'ls -la' in /tmp/crucible_0z3zkbcf
+ succeeded in 0ms:
+total 168
+drwx------  4 infatoshi infatoshi   4096 Apr  1 10:55 .
+drwxrwxrwt 60 root      root      126976 Apr  1 10:54 ..
+drwxrwxr-x  8 infatoshi infatoshi   4096 Apr  1 10:55 .git
+drwxrwxr-x  2 infatoshi infatoshi   4096 Apr  1 10:55 __pycache__
+-rw-rw-r--  1 infatoshi infatoshi  14060 Apr  1 10:54 _evaluate.py
+-rw-rw-r--  1 infatoshi infatoshi   5194 Apr  1 10:54 prior_best.py
+-rw-rw-r--  1 infatoshi infatoshi   2049 Apr  1 10:54 reference.py
+
+codex
+I’ve identified a strong baseline in `prior_best.py` (NF4 linears + custom INT4 embedding/LM head). I’ll implement a cleaned `solution.py` with on-disk cached quantized embedding weights and honest compressed-size accounting, then add tests and run `ruff`/`pytest`.
+exec
+/usr/bin/zsh -lc 'uv pip install torch transformers bitsandbytes pytest ruff safetensors' in /tmp/crucible_0z3zkbcf
+ exited 2 in 0ms:
+error: No virtual environment found; run `uv venv` to create an environment, or pass `--system` to install into a non-virtual environment
+
+codex
+I need a local virtual environment first. I’m creating one with `uv venv`, then installing the required packages inside it.
+exec
+/usr/bin/zsh -lc 'uv venv && uv pip install torch transformers bitsandbytes pytest ruff safetensors' in /tmp/crucible_0z3zkbcf
+ succeeded in 429ms:
+Resolved 58 packages in 306ms
+Installed 58 packages in 100ms
+ + annotated-doc==0.0.4
+ + anyio==4.13.0
+ + bitsandbytes==0.49.2
+ + certifi==2026.2.25
+ + click==8.3.1
+ + cuda-bindings==13.2.0
+ + cuda-pathfinder==1.5.0
+ + cuda-toolkit==13.0.2
+ + filelock==3.25.2
+ + fsspec==2026.3.0
+ + h11==0.16.0
+ + hf-xet==1.4.3
+ + httpcore==1.0.9
+ + httpx==0.28.1
+ + huggingface-hub==1.8.0
+ + idna==3.11
+ + iniconfig==2.3.0
+ + jinja2==3.1.6
+ + markdown-it-py==4.0.0
+ + markupsafe==3.0.3
+ + mdurl==0.1.2
+ + mpmath==1.3.0
+ + networkx==3.6.1
+ + numpy==2.4.4
+ + nvidia-cublas==13.1.0.3
+ + nvidia-cuda-cupti==13.0.85
+ + nvidia-cuda-nvrtc==13.0.88
+ + nvidia-cuda-runtime==13.0.96
+ + nvidia-cudnn-cu13==9.19.0.56
+ + nvidia-cufft==12.0.0.61
+ + nvidia-cufile==1.15.1.6
+ + nvidia-curand==10.4.0.35
+ + nvidia-cusolver==12.0.4.66
+ + nvidia-cusparse==12.6.3.3
+ + nvidia-cusparselt-cu13==0.8.0
+ + nvidia-nccl-cu13==2.28.9
+ + nvidia-nvjitlink==13.0.88
+ + nvidia-nvshmem-cu13==3.4.5
+ + nvidia-nvtx==13.0.85
+ + packaging==26.0
+ + pluggy==1.6.0
+ + pygments==2.20.0
+ + pytest==9.0.2
+ + pyyaml==6.0.3
+ + regex==2026.3.32
+ + rich==14.3.3
+ + ruff==0.15.8
+ + safetensors==0.7.0
+ + setuptools==81.0.0
+ + shellingham==1.5.4
+ + sympy==1.14.0
+ + tokenizers==0.22.2
+ + torch==2.11.0
+ + tqdm==4.67.3
+ + transformers==5.4.0
+ + triton==3.6.0
+ + typer==0.24.1
+ + typing-extensions==4.15.0
+
+codex
+I’m now writing `solution.py` with three concrete pieces: NF4 loading for transformer linears, persistent INT4 packing for embeddings/lm_head, and explicit byte accounting for the compressed representation. After that I’ll add fast unit tests for the INT4 packing path.
+exec
+/usr/bin/zsh -lc "cat > solution.py <<'PY'
+\"\"\"Quantized Qwen3-4B solution: NF4 linears + INT4 embedding/lm_head.
+
+This implementation keeps transformer linear layers in bitsandbytes NF4 and replaces
+embedding/lm_head with a shared symmetric INT4 table (per-group scales).
+\"\"\"
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import torch
+import torch.nn as nn
+from safetensors.torch import load_file, save_file
+from transformers import AutoModelForCausalLM, BitsAndBytesConfig
+
+MODEL_ID = \"Qwen/Qwen3-4B\"
+EMBED_GROUP_SIZE = 128
+
+# Architecture constants for byte accounting.
+HIDDEN_SIZE = 2560
+NUM_LAYERS = 36
+NUM_HEADS = 32
+NUM_KV_HEADS = 8
+INTERMEDIATE_SIZE = 9728
+VOCAB_SIZE = 151_936
+
+CACHE_DIR = Path(__file__).resolve().parent / \".quant_cache\"
+INT4_TABLE_PATH = CACHE_DIR / \"qwen3_4b_embed_int4.safetensors\"
+
+_COMPRESSED_SIZE_BYTES: int | None = None
+
+
+def quantize_to_int4(weight: torch.Tensor, group_size: int = EMBED_GROUP_SIZE) -> tuple[torch.Tensor, torch.Tensor]:
+    \"\"\"Symmetric INT4 quantization with per-group scales over the last dimension.\"\"\"
+    rows, cols = weight.shape
+    if cols % group_size "'!= 0:
+        raise ValueError(f"Expected cols divisible by group_size, got {cols} and {group_size}")
+    if cols % 2 != 0:
+        raise ValueError(f"Expected even cols for nibble packing, got {cols}")
+
+    num_groups = cols // group_size
+    grouped = weight.reshape(rows, num_groups, group_size)
+
+    scales = grouped.abs().amax(dim=-1, keepdim=True) / 7.0
+    scales = scales.clamp(min=1e-8)
+
+    quant = (grouped / scales).round().clamp(-8, 7)
+    quant_u4 = (quant + 8).to(torch.uint8)  # [0, 15]
+    quant_u4 = quant_u4.reshape(rows, cols)
+
+    packed = quant_u4[:, 0::2] | (quant_u4[:, 1::2] << 4)
+    return packed.contiguous(), scales.squeeze(-1).to(torch.float16).contiguous()
+
+
+def dequantize_int4(
+    packed: torch.Tensor,
+    scales: torch.Tensor,
+    hidden_size: int,
+    group_size: int = EMBED_GROUP_SIZE,
+) -> torch.Tensor:
+    """Unpack uint8 nibbles into signed INT4 and dequantize with per-group scales."""
+    dtype = scales.dtype
+
+    low = (packed & 0xF).to(dtype) - 8.0
+    high = ((packed >> 4) & 0xF).to(dtype) - 8.0
+    unpacked = torch.stack((low, high), dim=-1).reshape(*packed.shape[:-1], packed.shape[-1] * 2)
+
+    num_groups = hidden_size // group_size
+    unpacked = unpacked.reshape(*unpacked.shape[:-1], num_groups, group_size)
+    dequant = unpacked * scales.unsqueeze(-1)
+    return dequant.reshape(*packed.shape[:-1], hidden_size)
+
+
+class INT4Embedding(nn.Module):
+    def __init__(self, packed_weight: torch.Tensor, scales: torch.Tensor, hidden_size: int) -> None:
+        super().__init__()
+        self.register_buffer("packed_weight", packed_weight, persistent=True)
+        self.register_buffer("scales", scales, persistent=True)
+        self.hidden_size = hidden_size
+
+    def forward(self, input_ids: torch.Tensor) -> torch.Tensor:
+        packed = self.packed_weight[input_ids]
+        scales = self.scales[input_ids]
+        return dequantize_int4(packed, scales, self.hidden_size)
+
+
+class INT4LMHead(nn.Module):
+    def __init__(self, packed_weight: torch.Tensor, scales: torch.Tensor, hidden_size: int, vocab_size: int) -> None:
+        super().__init__()
+        self.register_buffer("packed_weight", packed_weight, persistent=True)
+        self.register_buffer("scales", scales, persistent=True)
+        self.hidden_size = hidden_size
+        self.vocab_size = vocab_size
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        out_shape = (*x.shape[:-1], self.vocab_size)
+        x_flat = x.reshape(-1, x.shape[-1])
+
+        # Chunk over vocabulary to cap temporary dequantized matrix memory.
+        chunk_size = 32_768
+        logits_parts = []
+        for start in range(0, self.vocab_size, chunk_size):
+            end = min(start + chunk_size, self.vocab_size)
+            w = dequantize_int4(self.packed_weight[start:end], self.scales[start:end], self.hidden_size)
+            logits_parts.append(x_flat @ w.to(dtype=x.dtype).T)
+
+        return torch.cat(logits_parts, dim=-1).reshape(out_shape)
+
+
+def _load_or_build_int4_tables(model: nn.Module) -> tuple[torch.Tensor, torch.Tensor]:
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+
+    if INT4_TABLE_PATH.exists():
+        tensors = load_file(str(INT4_TABLE_PATH))
+        packed = tensors["packed_weight"].contiguous()
+        scales = tensors["scales"].contiguous()
+        return packed, scales
+
+    embed_weight = model.model.embed_tokens.weight.detach().cpu().float()
+    packed, scales = quantize_to_int4(embed_weight)
+    save_file({"packed_weight": packed, "scales": scales}, str(INT4_TABLE_PATH))
+    return packed, scales
+
+
+def _estimate_nf4_linear_bytes() -> int:
+    """Estimated storage for NF4 + double-quant metadata on linear layers."""
+    head_dim = HIDDEN_SIZE // NUM_HEADS
+
+    q_params = HIDDEN_SIZE * NUM_HEADS * head_dim
+    k_params = HIDDEN_SIZE * NUM_KV_HEADS * head_dim
+    v_params = HIDDEN_SIZE * NUM_KV_HEADS * head_dim
+    o_params = NUM_HEADS * head_dim * HIDDEN_SIZE
+    attn_params = q_params + k_params + v_params + o_params
+
+    mlp_params = 3 * HIDDEN_SIZE * INTERMEDIATE_SIZE
+    total_linear_params = (attn_params + mlp_params) * NUM_LAYERS
+
+    # Approximation for bitsandbytes NF4 with group size 64 and nested quant.
+    bytes_per_param = 0.5
+    scale_overhead = 1.0 / 64
+    nested_overhead = 4.0 / (64 * 256)
+
+    return int(total_linear_params * (bytes_per_param + scale_overhead + nested_overhead))
+
+
+def _estimate_fp16_norm_bytes() -> int:
+    """RMSNorm and small unquantized vectors kept in fp16."""
+    # Two RMSNorms per layer + final norm.
+    norm_params = NUM_LAYERS * (2 * HIDDEN_SIZE) + HIDDEN_SIZE
+    return norm_params * 2
+
+
+def _estimate_int4_embedding_bytes() -> int:
+    if INT4_TABLE_PATH.exists():
+        tensors = load_file(str(INT4_TABLE_PATH))
+        packed = tensors["packed_weight"]
+        scales = tensors["scales"]
+        return packed.numel() * packed.element_size() + scales.numel() * scales.element_size()
+
+    embed_params = VOCAB_SIZE * HIDDEN_SIZE
+    int4_weight_bytes = embed_params // 2
+    scale_bytes = VOCAB_SIZE * (HIDDEN_SIZE // EMBED_GROUP_SIZE) * 2
+    return int4_weight_bytes + scale_bytes
+
+
+def load_model(device: str | torch.device = "cuda") -> nn.Module:
+    global _COMPRESSED_SIZE_BYTES
+
+    bnb_config = BitsAndBytesConfig(
+        load_in_4bit=True,
+        bnb_4bit_quant_type="nf4",
+        bnb_4bit_compute_dtype=torch.float16,
+        bnb_4bit_use_double_quant=True,
+    )
+
+    model = AutoModelForCausalLM.from_pretrained(
+        MODEL_ID,
+        quantization_config=bnb_config,
+        device_map=device,
+        torch_dtype=torch.float16,
+        low_cpu_mem_usage=True,
+    )
+    model.eval()
+
+    packed, scales = _load_or_build_int4_tables(model)
+    target_device = torch.device(device) if isinstance(device, str) else device
+
+    packed = packed.to(target_device)
+    scales = scales.to(target_device)
+
+    model.model.embed_tokens = INT4Embedding(packed, scales, HIDDEN_SIZE).to(target_device)
+    model.lm_head = INT4LMHead(packed, scales, HIDDEN_SIZE, VOCAB_SIZE).to(target_device)
+
+    _COMPRESSED_SIZE_BYTES = _estimate_nf4_linear_bytes() + _estimate_int4_embedding_bytes() + _estimate_fp16_norm_bytes()
+    return model
+
+
+def get_compressed_size() -> int:
+    if _COMPRESSED_SIZE_BYTES is not None:
+        return int(_COMPRESSED_SIZE_BYTES)
+
+    return _estimate_nf4_linear_bytes() + _estimate_int4_embedding_bytes() + _estimate_fp16_norm_bytes()
+PY' in /tmp/crucible_0z3zkbcf
+ succeeded in 0ms:
+codex
+I introduced a shell-quoting typo while writing the file. I’m fixing that now and then adding tests.
+exec
+/usr/bin/zsh -lc "sed -n '1,260p' solution.py" in /tmp/crucible_0z3zkbcf
+ succeeded in 0ms:
+"""Quantized Qwen3-4B solution: NF4 linears + INT4 embedding/lm_head.
+
+This implementation keeps transformer linear layers in bitsandbytes NF4 and replaces
+embedding/lm_head with a shared symmetric INT4 table (per-group scales).
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import torch
+import torch.nn as nn
+from safetensors.torch import load_file, save_file
+from transformers import AutoModelForCausalLM, BitsAndBytesConfig
+
+MODEL_ID = "Qwen/Qwen3-4B"
+EMBED_GROUP_SIZE = 128
+
+# Architecture constants for byte accounting.
+HIDDEN_SIZE = 2560
+NUM_LAYERS = 36
+NUM_HEADS = 32
+NUM_KV_HEADS = 8
+INTERMEDIATE_SIZE = 9728
+VOCAB_SIZE = 151_936
+
+CACHE_DIR = Path(__file__).resolve().parent / ".quant_cache"
+INT4_TABLE_PATH = CACHE_DIR / "qwen3_4b_embed_int4.safetensors"
+
+_COMPRESSED_SIZE_BYTES: int | None = None
+
+
+def quantize_to_int4(weight: torch.Tensor, group_size: int = EMBED_GROUP_SIZE) -> tuple[torch.Tensor, torch.Tensor]:
+    """Symmetric INT4 quantization with per-group scales over the last dimension."""
+    rows, cols = weight.shape
+    if cols % group_size != 0:
+        raise ValueError(f"Expected cols divisible by group_size, got {cols} and {group_size}")
+    if cols % 2 != 0:
+        raise ValueError(f"Expected even cols for nibble packing, got {cols}")
+
+    num_groups = cols // group_size
+    grouped = weight.reshape(rows, num_groups, group_size)
+
+    scales = grouped.abs().amax(dim=-1, keepdim=True) / 7.0
+    scales = scales.clamp(min=1e-8)
+
+    quant = (grouped / scales).round().clamp(-8, 7)
+    quant_u4 = (quant + 8).to(torch.uint8)  # [0, 15]
+    quant_u4 = quant_u4.reshape(rows, cols)
+
+    packed = quant_u4[:, 0::2] | (quant_u4[:, 1::2] << 4)
+    return packed.contiguous(), scales.squeeze(-1).to(torch.float16).contiguous()
+
+
+def dequantize_int4(
+    packed: torch.Tensor,
+    scales: torch.Tensor,
+    hidden_size: int,
+    group_size: int = EMBED_GROUP_SIZE,
+) -> torch.Tensor:
+    """Unpack uint8 nibbles into signed INT4 and dequantize with per-group scales."""
+    dtype = scales.dtype
+
+    low = (packed & 0xF).to(dtype) - 8.0
+    high = ((packed >> 4) & 0xF).to(dtype) - 8.0
+    unpacked = torch.stack((low, high), dim=-1).reshape(*packed.shape[:-1], packed.shape[-1] * 2)
+
+    num_groups = hidden_size // group_size
+    unpacked = unpacked.reshape(*unpacked.shape[:-1], num_groups, group_size)
+    dequant = unpacked * scales.unsqueeze(-1)
+    return dequant.reshape(*packed.shape[:-1], hidden_size)
+
+
+class INT4Embedding(nn.Module):
+    def __init__(self, packed_weight: torch.Tensor, scales: torch.Tensor, hidden_size: int) -> None:
+        super().__init__()
+        self.register_buffer("packed_weight", packed_weight, persistent=True)
+        self.register_buffer("scales", scales, persistent=True)
+        self.hidden_size = hidden_size
+
+    def forward(self, input_ids: torch.Tensor) -> torch.Tensor:
+        packed = self.packed_weight[input_ids]
+        scales = self.scales[input_ids]
+        return dequantize_int4(packed, scales, self.hidden_size)
+
+
+class INT4LMHead(nn.Module):
+    def __init__(self, packed_weight: torch.Tensor, scales: torch.Tensor, hidden_size: int, vocab_size: int) -> None:
+        super().__init__()
+        self.register_buffer("packed_weight", packed_weight, persistent=True)
+        self.register_buffer("scales", scales, persistent=True)
+        self.hidden_size = hidden_size
+        self.vocab_size = vocab_size
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        out_shape = (*x.shape[:-1], self.vocab_size)
+        x_flat = x.reshape(-1, x.shape[-1])
+
+        # Chunk over vocabulary to cap temporary dequantized matrix memory.
+        chunk_size = 32_768
+        logits_parts = []
+        for start in range(0, self.vocab_size, chunk_size):
+            end = min(start + chunk_size, self.vocab_size)
+            w = dequantize_int4(self.packed_weight[start:end], self.scales[start:end], self.hidden_size)
+            logits_parts.append(x_flat @ w.to(dtype=x.dtype).T)
+
+        return torch.cat(logits_parts, dim=-1).reshape(out_shape)
+
+
+def _load_or_build_int4_tables(model: nn.Module) -> tuple[torch.Tensor, torch.Tensor]:
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+
+    if INT4_TABLE_PATH.exists():
+        tensors = load_file(str(INT4_TABLE_PATH))
+        packed = tensors["packed_weight"].contiguous()
+        scales = tensors["scales"].contiguous()
+        return packed, scales
+
+    embed_weight = model.model.embed_tokens.weight.detach().cpu().float()
+    packed, scales = quantize_to_int4(embed_weight)
+    save_file({"packed_weight": packed, "scales": scales}, str(INT4_TABLE_PATH))
+    return packed, scales
+
+
+def _estimate_nf4_linear_bytes() -> int:
+    """Estimated storage for NF4 + double-quant metadata on linear layers."""
+    head_dim = HIDDEN_SIZE // NUM_HEADS
+
+    q_params = HIDDEN_SIZE * NUM_HEADS * head_dim
+    k_params = HIDDEN_SIZE * NUM_KV_HEADS * head_dim
+    v_params = HIDDEN_SIZE * NUM_KV_HEADS * head_dim
+    o_params = NUM_HEADS * head_dim * HIDDEN_SIZE
+    attn_params = q_params + k_params + v_params + o_params
+
+    mlp_params = 3 * HIDDEN_SIZE * INTERMEDIATE_SIZE
+    total_linear_params = (attn_params + mlp_params) * NUM_LAYERS
+
+    # Approximation for bitsandbytes NF4 with group size 64 and nested quant.
+    bytes_per_param = 0.5
+    scale_overhead = 1.0 / 64
+    nested_overhead = 4.0 / (64 * 256)
+
+    return int(total_linear_params * (bytes_per_param + scale_overhead + nested_overhead))
+
+
+def _estimate_fp16_norm_bytes() -> int:
+    """RMSNorm and small unquantized vectors kept in fp16."""
+    # Two RMSNorms per layer + final norm.
+    norm_params = NUM_LAYERS * (2 * HIDDEN_SIZE) + HIDDEN_SIZE
+    return norm_params * 2
+
+
+def _estimate_int4_embedding_bytes() -> int:
+    if INT4_TABLE_PATH.exists():
+        tensors = load_file(str(INT4_TABLE_PATH))
+        packed = tensors["packed_weight"]
+        scales = tensors["scales"]
+        return packed.numel() * packed.element_size() + scales.numel() * scales.element_size()
+
+    embed_params = VOCAB_SIZE * HIDDEN_SIZE
+    int4_weight_bytes = embed_params // 2
+    scale_bytes = VOCAB_SIZE * (HIDDEN_SIZE // EMBED_GROUP_SIZE) * 2
+    return int4_weight_bytes + scale_bytes
+
+
+def load_model(device: str | torch.device = "cuda") -> nn.Module:
+    global _COMPRESSED_SIZE_BYTES
+
+    bnb_config = BitsAndBytesConfig(
+        load_in_4bit=True,
+        bnb_4bit_quant_type="nf4",
+        bnb_4bit_compute_dtype=torch.float16,
+        bnb_4bit_use_double_quant=True,
+    )
+
+    model = AutoModelForCausalLM.from_pretrained(
+        MODEL_ID,
+        quantization_config=bnb_config,
+        device_map=device,
+        torch_dtype=torch.float16,
+        low_cpu_mem_usage=True,
+    )
+    model.eval()
+
+    packed, scales = _load_or_build_int4_tables(model)
+    target_device = torch.device(device) if isinstance(device, str) else device
+
+    packed = packed.to(target_device)
+    scales = scales.to(target_device)
+
+    model.model.embed_tokens = INT4Embedding(packed, scales, HIDDEN_SIZE).to(target_device)
+    model.lm_head = INT4LMHead(packed, scales, HIDDEN_SIZE, VOCAB_SIZE).to(target_device)
+
+    _COMPRESSED_SIZE_BYTES = _estimate_nf4_linear_bytes() + _estimate_int4_embedding_bytes() + _estimate_fp16_norm_bytes()
+    return model
+
+
+def get_compressed_size() -> int:
+    if _COMPRESSED_SIZE_BYTES is not None:
+        return int(_COMPRESSED_SIZE_BYTES)
+
+    return _estimate_nf4_linear_bytes() + _estimate_int4_embedding_bytes() + _estimate_fp16_norm_bytes()
+
+exec
+/usr/bin/zsh -lc "mkdir -p tests && cat > tests/test_solution.py <<'PY'
+import torch
+
+import solution
+
+
+def test_int4_roundtrip_small_tensor():
+    torch.manual_seed(0)
+    weight = torch.randn(16, 128) * 0.5
+
+    packed, scales = solution.quantize_to_int4(weight, group_size=32)
+    deq = solution.dequantize_int4(packed, scales, hidden_size=128, group_size=32)
+
+    assert packed.dtype == torch.uint8
+    assert scales.dtype == torch.float16
+    assert packed.shape == (16, 64)
+    assert scales.shape == (16, 4)
+
+    max_err = (weight - deq.float()).abs().max().item()
+    assert max_err < 0.35
+
+
+def test_get_compressed_size_bounds():
+    size = solution.get_compressed_size()
+    assert isinstance(size, int)
+    assert size > 0
+    assert size < 8_044_936_192
+PY" in /tmp/crucible_0z3zkbcf
+ succeeded in 0ms:
+codex
+I’ve added unit tests for the INT4 path and size reporting. Next I’m running `ruff` and `pytest` per the repository requirements.
+exec
+/usr/bin/zsh -lc 'uv run ruff check . --fix' in /tmp/crucible_0z3zkbcf
+ succeeded in 0ms:
+All checks passed!
+
+exec
+/usr/bin/zsh -lc 'uv run pytest -q' in /tmp/crucible_0z3zkbcf
+ exited 2 in 1884ms:
+
+==================================== ERRORS ====================================
+___________________ ERROR collecting tests/test_solution.py ____________________
+ImportError while importing test module '/tmp/crucible_0z3zkbcf/tests/test_solution.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+/home/infatoshi/.local/share/uv/python/cpython-3.11.15-linux-x86_64-gnu/lib/python3.11/importlib/__init__.py:126: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/test_solution.py:3: in <module>
+    import solution
+E   ModuleNotFoundError: No module named 'solution'
+=========================== short test summary info ============================
+ERROR tests/test_solution.py
+!!!!!!!!!!!!!!!!!!!! Interrupted: 1 error during collection !!!!!!!!!!!!!!!!!!!!
+1 error in 1.26s
+
+codex
+`pytest` couldn’t import `solution.py` from the repo root. I’m adding a minimal `tests/conftest.py` to put the project root on `sys.path`, then rerunning lint and tests.
+exec
+/usr/bin/zsh -lc "cat > tests/conftest.py <<'PY'
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+PY" in /tmp/crucible_0z3zkbcf
+ succeeded in 0ms:
+exec
+/usr/bin/zsh -lc 'uv run ruff check . --fix' in /tmp/crucible_0z3zkbcf
+ succeeded in 0ms:
+All checks passed!
+
+exec
+/usr/bin/zsh -lc 'uv run pytest -q' in /tmp/crucible_0z3zkbcf
+ exited 2 in 1786ms:
+
+==================================== ERRORS ====================================
+___________________ ERROR collecting tests/test_solution.py ____________________
+ImportError while importing test module '/tmp/crucible_0z3zkbcf/tests/test_solution.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+.venv/lib/python3.11/site-packages/sympy/__init__.py:23: in <module>
+    import mpmath
+.venv/lib/python3.11/site-packages/mpmath/__init__.py:5: in <module>
+    from .ctx_fp import FPContext
+.venv/lib/python3.11/site-packages/mpmath/ctx_fp.py:1: in <module>
+    from .ctx_base import StandardBaseContext
+.venv/lib/python3.11/site-packages/mpmath/ctx_base.py:3: in <module>
+    from .libmp.backend import xrange
+.venv/lib/python3.11/site-packages/mpmath/libmp/__init__.py:17: in <module>
+    from .libmpc import (mpc_one, mpc_zero, mpc_two, mpc_half,
+.venv/lib/python3.11/site-packages/mpmath/libmp/libmpc.py:9: in <module>
+    from .libmpf import (\
+E   ImportError: cannot import name 'rshift' from 'mpmath.libmp.libmpf' (/tmp/crucible_0z3zkbcf/.venv/lib/python3.11/site-packages/mpmath/libmp/libmpf.py)
+
+During handling of the above exception, another exception occurred:
+/home/infatoshi/.local/share/uv/python/cpython-3.11.15-linux-x86_64-gnu/lib/python3.11/importlib/__init__.py:126: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/test_solution.py:3: in <module>
+    import solution
+solution.py:14: in <module>
+    from transformers import AutoModelForCausalLM, BitsAndBytesConfig
+.venv/lib/python3.11/site-packages/transformers/__init__.py:30: in <module>
+    from . import dependency_versions_check
+.venv/lib/python3.11/site-packages/transformers/dependency_versions_check.py:16: in <module>
+    from .utils.versions import require_version, require_version_core
+.venv/lib/python3.11/site-packages/transformers/utils/__init__.py:22: in <module>
+    from .auto_docstring import (
+.venv/lib/python3.11/site-packages/transformers/utils/auto_docstring.py:32: in <module>
+    from .generic import ModelOutput
+.venv/lib/python3.11/site-packages/transformers/utils/generic.py:45: in <module>
+    from ..model_debugging_utils import model_addition_debugger_context
+.venv/lib/python3.11/site-packages/transformers/model_debugging_utils.py:34: in <module>
+    import torch.distributed.tensor
+.venv/lib/python3.11/site-packages/torch/distributed/tensor/__init__.py:4: in <module>
+    import torch.distributed.tensor._ops  # force import all built-in dtensor ops
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.11/site-packages/torch/distributed/tensor/_ops/__init__.py:8: in <module>
+    from ._tensor_ops import *  # noqa: F403
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.11/site-packages/torch/distributed/tensor/_ops/_tensor_ops.py:44: in <module>
+    from torch.fx.experimental.symbolic_shapes import statically_known_true
+.venv/lib/python3.11/site-packages/torch/fx/experimental/symbolic_shapes.py:3: in <module>
+    import sympy
+.venv/lib/python3.11/site-packages/sympy/__init__.py:25: in <module>
+    raise ImportError("SymPy now depends on mpmath as an external library. "
+E   ImportError: SymPy now depends on mpmath as an external library. See https://docs.sympy.org/latest/install.html#mpmath for more information.
+=========================== short test summary info ============================
+ERROR tests/test_solution.py
+!!!!!!!!!!!!!!!!!!!! Interrupted: 1 error during collection !!!!!!!!!!!!!!!!!!!!
+1 error in 1.30s
+
+codex
+There’s an environment issue with `mpmath`/`sympy` causing import failure before tests run. I’m repairing those packages in the venv and rerunning checks.
+exec
+/usr/bin/zsh -lc 'uv pip install --reinstall mpmath==1.3.0 sympy==1.14.0' in /tmp/crucible_0z3zkbcf
+ succeeded in 120ms:
+Uninstalled 2 packages in 8ms
+Installed 2 packages in 12ms
+ ~ mpmath==1.3.0
+ ~ sympy==1.14.0
+
+exec
+/usr/bin/zsh -lc 'uv run ruff check . --fix' in /tmp/crucible_0z3zkbcf
+ succeeded in 0ms:
+All checks passed!
+
+exec
+/usr/bin/zsh -lc 'uv run pytest -q' in /tmp/crucible_0z3zkbcf
+ exited 2 in 1313ms:
+
+==================================== ERRORS ====================================
+___________________ ERROR collecting tests/test_solution.py ____________________
+ImportError while importing test module '/tmp/crucible_0z3zkbcf/tests/test_solution.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+.venv/lib/python3.11/site-packages/sympy/__init__.py:23: in <module>
+    import mpmath
+.venv/lib/python3.11/site-packages/mpmath/__init__.py:5: in <module>
+    from .ctx_fp import FPContext
+.venv/lib/python3.11/site-packages/mpmath/ctx_fp.py:1: in <module>
+    from .ctx_base import StandardBaseContext
+.venv/lib/python3.11/site-packages/mpmath/ctx_base.py:3: in <module>
+    from .libmp.backend import xrange
+.venv/lib/python3.11/site-packages/mpmath/libmp/__init__.py:17: in <module>
+    from .libmpc import (mpc_one, mpc_zero, mpc_two, mpc_half,
+.venv/lib/python3.11/site-packages/mpmath/libmp/libmpc.py:9: in <module>
+    from .libmpf import (\
+E   ImportError: cannot import name 'rshift' from 'mpmath.libmp.libmpf' (/tmp/crucible_0z3zkbcf/.venv/lib/python3.11/site-packages/mpmath/libmp/libmpf.py)
+
+During handling of the above exception, another exception occurred:
+/home/infatoshi/.local/share/uv/python/cpython-3.11.15-linux-x86_64-gnu/lib/python3.11/importlib/__init__.py:126: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/test_solution.py:3: in <module>
+    import solution
+solution.py:14: in <module>
+    from transformers import AutoModelForCausalLM, BitsAndBytesConfig
+.venv/lib/python3.11/site-packages/transformers/__init__.py:30: in <module>
+    from . import dependency_versions_check
+.venv/lib/python3.11/site-packages/transformers/dependency_versions_check.py:16: in <module>
+    from .utils.versions import require_version, require_version_core
+.venv/lib/python3.11/site-packages/transformers/utils/__init__.py:22: in <module>
+    from .auto_docstring import (
+.venv/lib/python3.11/site-packages/transformers/utils/auto_docstring.py:32: in <module>
+    from .generic import ModelOutput
+.venv/lib/python3.11/site-packages/transformers/utils/generic.py:45: in <module>
+    from ..model_debugging_utils import model_addition_debugger_context
+.venv/lib/python3.11/site-packages/transformers/model_debugging_utils.py:34: in <module>
+    import torch.distributed.tensor
+.venv/lib/python3.11/site-packages/torch/distributed/tensor/__init__.py:4: in <module>
+    import torch.distributed.tensor._ops  # force import all built-in dtensor ops
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.11/site-packages/torch/distributed/tensor/_ops/__init__.py:8: in <module>
+    from ._tensor_ops import *  # noqa: F403
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^
+.venv/lib/python3.11/site-packages/torch/distributed/tensor/_ops/_tensor_ops.py:44: in <module>
+    from torch.fx.experimental.symbolic_shapes import statically_known_true
+.venv/lib/python3.11/site-packages/torch/fx/experimental/symbolic_shapes.py:3: in <module>
+    import sympy
+.venv/lib/python3.11/site-packages/sympy/__init__.py:25: in <module>
+    raise ImportError("SymPy now depends on mpmath as an external library. "
+E   ImportError: SymPy now depends on mpmath as an external library. See https://docs.sympy.org/latest/install.html#mpmath for more information.
+=========================== short test summary info ============================
+ERROR tests/test_solution.py
+!!!!!!!!!!!!!!!!!!!! Interrupted: 1 error during collection !!!!!!!!!!!!!!!!!!!!
+1 error in 0.87s
+
+exec
+/usr/bin/zsh -lc "uv run python - <<'PY'
+import mpmath, inspect, pathlib
+import mpmath.libmp.libmpf as libmpf
+print('mpmath', mpmath.__version__)
+print('file', pathlib.Path(libmpf.__file__))
+src = pathlib.Path(libmpf.__file__).read_text()
+print('has rshift def', 'def rshift' in src)
+print(src[:220])
+PY" in /tmp/crucible_0z3zkbcf
+ exited 1 in 0ms:
+Traceback (most recent call last):
+  File "<stdin>", line 1, in <module>
+  File "/tmp/crucible_0z3zkbcf/.venv/lib/python3.11/site-packages/mpmath/__init__.py", line 5, in <module>
+    from .ctx_fp import FPContext
+  File "/tmp/crucible_0z3zkbcf/.venv/lib/python3.11/site-packages/mpmath/ctx_fp.py", line 1, in <module>
+    from .ctx_base import StandardBaseContext
+  File "/tmp/crucible_0z3zkbcf/.venv/lib/python3.11/site-packages/mpmath/ctx_base.py", line 3, in <module>
+    from .libmp.backend import xrange
+  File "/tmp/crucible_0z3zkbcf/.venv/lib/python3.11/site-packages/mpmath/libmp/__init__.py", line 17, in <module>
+    from .libmpc import (mpc_one, mpc_zero, mpc_two, mpc_half,
+  File "/tmp/crucible_0z3zkbcf/.venv/lib/python3.11/site-packages/mpmath/libmp/libmpc.py", line 9, in <module>
+    from .libmpf import (\
+ImportError: cannot import name 'rshift' from 'mpmath.libmp.libmpf' (/tmp/crucible_0z3zkbcf/.venv/lib/python3.11/site-packages/mpmath/libmp/libmpf.py)
+
+codex
+To unblock tests, I’m making `transformers`/`bitsandbytes` imports lazy inside `load_model()`, so importing `solution` for unit tests doesn’t trigger the broken `sympy` path.
+apply patch
+patch: completed
+/tmp/crucible_0z3zkbcf/solution.py
+diff --git a/solution.py b/solution.py
+index 29dd67c4226333b113378a9f2457dc52f1b7a02f..3801ade612ebe00a03e155b60c9d0d21529e6fd1
+--- a/solution.py
++++ b/solution.py
+@@ -11,7 +11,6 @@
+ import torch
+ import torch.nn as nn
+ from safetensors.torch import load_file, save_file
+-from transformers import AutoModelForCausalLM, BitsAndBytesConfig
+ 
+ MODEL_ID = "Qwen/Qwen3-4B"
+ EMBED_GROUP_SIZE = 128
+@@ -165,6 +164,7 @@
+ 
+ def load_model(device: str | torch.device = "cuda") -> nn.Module:
+     global _COMPRESSED_SIZE_BYTES
++    from transformers import AutoModelForCausalLM, BitsAndBytesConfig
+ 
+     bnb_config = BitsAndBytesConfig(
+         load_in_4bit=True,
+
+diff --git a/solution.py b/solution.py
+index 29dd67c4226333b113378a9f2457dc52f1b7a02f..3801ade612ebe00a03e155b60c9d0d21529e6fd1
+--- a/solution.py
++++ b/solution.py
+@@ -11,7 +11,6 @@
+ import torch
+ import torch.nn as nn
+ from safetensors.torch import load_file, save_file
+-from transformers import AutoModelForCausalLM, BitsAndBytesConfig
+ 
+ MODEL_ID = "Qwen/Qwen3-4B"
+ EMBED_GROUP_SIZE = 128
+@@ -165,6 +164,7 @@
+ 
+ def load_model(device: str | torch.device = "cuda") -> nn.Module:
+     global _COMPRESSED_SIZE_BYTES
++    from transformers import AutoModelForCausalLM, BitsAndBytesConfig
+ 
+     bnb_config = BitsAndBytesConfig(
+         load_in_4bit=True,
+
+exec
+/usr/bin/zsh -lc 'uv run ruff check . --fix' in /tmp/crucible_0z3zkbcf
+ succeeded in 0ms:
+All checks passed!
+
+exec
+/usr/bin/zsh -lc 'uv run pytest -q' in /tmp/crucible_0z3zkbcf
+diff --git a/solution.py b/solution.py
+index 29dd67c4226333b113378a9f2457dc52f1b7a02f..3801ade612ebe00a03e155b60c9d0d21529e6fd1
+--- a/solution.py
++++ b/solution.py
+@@ -11,7 +11,6 @@
+ import torch
+ import torch.nn as nn
+ from safetensors.torch import load_file, save_file
+-from transformers import AutoModelForCausalLM, BitsAndBytesConfig
+ 
+ MODEL_ID = "Qwen/Qwen3-4B"
+ EMBED_GROUP_SIZE = 128
+@@ -165,6 +164,7 @@
+ 
+ def load_model(device: str | torch.device = "cuda") -> nn.Module:
+     global _COMPRESSED_SIZE_BYTES
++    from transformers import AutoModelForCausalLM, BitsAndBytesConfig
+ 
+     bnb_config = BitsAndBytesConfig(
+         load_in_4bit=True,
+
+ succeeded in 1014ms:
+..                                                                       [100%]
+2 passed in 0.63s
+
+codex
+Lint and tests now pass. Next I’m validating runtime: first a lightweight `load_model()` smoke test (which also generates cached INT4 tables), then `_evaluate.py` end-to-end.
+exec
+/usr/bin/zsh -lc "rg -n \"def rshift|rshift\" .venv/lib/python3.11/site-packages/mpmath/libmp/libmpf.py | head -n 20 && sed -n '1,120p' .venv/lib/python3.11/site-packages/mpmath/libmp/libmpf.py" in /tmp/crucible_0z3zkbcf
+ succeeded in 0ms:
+"""
+Low-level functions for arbitrary-precision floating-point arithmetic.
+"""
+
+__docformat__ = 'plaintext'
+
+import math
+
+
+import sys
+
+# Importing random is slow
+#from random import getrandbits
+getrandbits = None
+
+from .backend import (MPZ, MPZ_TYPE, MPZ_ZERO, MPZ_ONE, MPZ_FIVE,
+    BACKEND, STRICT, HASH_MODULUS, HASH_BITS, gmpy, sage_utils)
+
+from .libintmath import (trailtable, bctable, bitcount, numeral, isqrt, sqrtrem,
+    bin_to_radix)
+
+# We don't pickle tuples directly for the following reasons:
+#   1: pickle uses str() for ints, which is inefficient when they are large
+#   2: pickle doesn't work for gmpy mpzs
+# Both problems are solved by using hex()
+
+if BACKEND == 'sage':
+    def to_pickable(x):
+        sign, man, exp, bc = x
+        return sign, hex(man), exp, bc
+else:
+    def to_pickable(x):
+        sign, man, exp, bc = x
+        return sign, hex(man)[2:], exp, bc
+
+def from_pickable(x):
+    sign, man, exp, bc = x
+    return (sign, MPZ(man, 16), exp, bc)
+
+class ComplexResult(ValueError):
+    pass
+
+try:
+    intern
+except NameError:
+    intern = lambda x: x
+
+# All supported rounding modes
+round_nearest = intern('n')
+round_floor = intern('f')
+round_ceiling = intern('c')
+round_up = intern('u')
+round_down = intern('d')
+round_fast = round_down
+
+def prec_to_dps(n):
+    """Return number of accurate decimals that can be represented
+    with a precision of n bits."""
+    return max(1, int(round(int(n)/3.3219280948873626)-1))
+
+def dps_to_prec(n):
+    """Return the number of bits required to represent n decimals
+    accurately."""
+    return max(1, int(round((int(n)+1)*3.3219280948873626)))
+
+def repr_dps(n):
+    """Return the number of decimal digits required to represent
+    a number with n-bit precision so that it can be uniquely
+    reconstructed from the representation."""
+    dps = prec_to_dps(n)
+    if dps == 15:
+        return 17
+    return dps + 3
+
+#----------------------------------------------------------------------------#
+#                    Some commonly needed float values                       #
+#----------------------------------------------------------------------------#
+
+# Regular number format:
+# (-1)**sign * mantissa * 2**exponent, plus bitcount of mantissa
+fzero = (0, MPZ_ZERO, 0, 0)
+fnzero = (1, MPZ_ZERO, 0, 0)
+fone = (0, MPZ_ONE, 0, 1)
+fnone = (1, MPZ_ONE, 0, 1)
+ftwo = (0, MPZ_ONE, 1, 1)
+ften = (0, MPZ_FIVE, 1, 3)
+fhalf = (0, MPZ_ONE, -1, 1)
+
+# Arbitrary encoding for special numbers: zero mantissa, nonzero exponent
+fnan = (0, MPZ_ZERO, -123, -1)
+finf = (0, MPZ_ZERO, -456, -2)
+fninf = (1, MPZ_ZERO, -789, -3)
+
+# Was 1e1000; this is broken in Python 2.4
+math_float_inf = 1e300 * 1e300
+
+
+#----------------------------------------------------------------------------#
+#                                  Rounding                                  #
+#----------------------------------------------------------------------------#
+
+# This function can be used to round a mantissa generally. However,
+# we will try to do most rounding inline for efficiency.
+def round_int(x, n, rnd):
+    if rnd == round_nearest:
+        if x >= 0:
+            t = x >> (n-1)
+            if t & 1 and ((t & 2) or (x & h_mask[n<300][n])):
+                return (t>>1)+1
+            else:
+                return t>>1
+        else:
+            return -round_int(-x, n, rnd)
+    if rnd == round_floor:
+        return x >> n
+    if rnd == round_ceiling:
+        return -((-x) >> n)
+    if rnd == round_down:
+        if x >= 0:
+            return x >> n
+
+diff --git a/solution.py b/solution.py
+index 29dd67c4226333b113378a9f2457dc52f1b7a02f..3801ade612ebe00a03e155b60c9d0d21529e6fd1
+--- a/solution.py
++++ b/solution.py
+@@ -11,7 +11,6 @@
+ import torch
+ import torch.nn as nn
+ from safetensors.torch import load_file, save_file
+-from transformers import AutoModelForCausalLM, BitsAndBytesConfig
+ 
+ MODEL_ID = "Qwen/Qwen3-4B"
+ EMBED_GROUP_SIZE = 128
+@@ -165,6 +164,7 @@
+ 
+ def load_model(device: str | torch.device = "cuda") -> nn.Module:
+     global _COMPRESSED_SIZE_BYTES
++    from transformers import AutoModelForCausalLM, BitsAndBytesConfig
+ 
+     bnb_config = BitsAndBytesConfig(
+         load_in_4bit=True,
+
+codex
+I found the root cause: this `mpmath` build lacks `rshift`, which breaks `sympy` import through `transformers`. I’m pinning `mpmath` to a known compatible version and then running the runtime checks.
+exec
+/usr/bin/zsh -lc 'uv pip install --reinstall mpmath==1.2.1' in /tmp/crucible_0z3zkbcf
+ succeeded in 0ms:
+Resolved 1 package in 98ms
+Prepared 1 package in 0.10ms
+Uninstalled 1 package in 0.65ms
+Installed 1 package in 2ms
+ - mpmath==1.3.0
+ + mpmath==1.2.1
+
+diff --git a/solution.py b/solution.py
+index 29dd67c4226333b113378a9f2457dc52f1b7a02f..3801ade612ebe00a03e155b60c9d0d21529e6fd1
+--- a/solution.py
++++ b/solution.py
+@@ -11,7 +11,6 @@
+ import torch
+ import torch.nn as nn
+ from safetensors.torch import load_file, save_file
+-from transformers import AutoModelForCausalLM, BitsAndBytesConfig
+ 
+ MODEL_ID = "Qwen/Qwen3-4B"
+ EMBED_GROUP_SIZE = 128
+@@ -165,6 +164,7 @@
+ 
+ def load_model(device: str | torch.device = "cuda") -> nn.Module:
+     global _COMPRESSED_SIZE_BYTES
++    from transformers import AutoModelForCausalLM, BitsAndBytesConfig
+ 
+     bnb_config = BitsAndBytesConfig(
+         load_in_4bit=True,
+
+exec
+/usr/bin/zsh -lc "uv run python - <<'PY'
+import mpmath, sympy, transformers
+print('mpmath', mpmath.__version__)
+print('sympy', sympy.__version__)
+print('transformers', transformers.__version__)
+PY" in /tmp/crucible_0z3zkbcf
+diff --git a/solution.py b/solution.py
+index 29dd67c4226333b113378a9f2457dc52f1b7a02f..3801ade612ebe00a03e155b60c9d0d21529e6fd1
+--- a/solution.py
++++ b/solution.py
+@@ -11,7 +11,6 @@
+ import torch
+ import torch.nn as nn
+ from safetensors.torch import load_file, save_file
+-from transformers import AutoModelForCausalLM, BitsAndBytesConfig
+ 
+ MODEL_ID = "Qwen/Qwen3-4B"
+ EMBED_GROUP_SIZE = 128
+@@ -165,6 +164,7 @@
+ 
+ def load_model(device: str | torch.device = "cuda") -> nn.Module:
+     global _COMPRESSED_SIZE_BYTES
++    from transformers import AutoModelForCausalLM, BitsAndBytesConfig
+ 
+     bnb_config = BitsAndBytesConfig(
+         load_in_4bit=True,
+
+ succeeded in 2192ms:
+mpmath 1.2.1
+sympy 1.14.0
+transformers 5.4.0
+
+exec
+/usr/bin/zsh -lc 'uv run ruff check . --fix' in /tmp/crucible_0z3zkbcf
+ succeeded in 0ms:
+All checks passed!
+
+exec
+/usr/bin/zsh -lc 'uv run pytest -q' in /tmp/crucible_0z3zkbcf
+diff --git a/solution.py b/solution.py
+index 29dd67c4226333b113378a9f2457dc52f1b7a02f..3801ade612ebe00a03e155b60c9d0d21529e6fd1
+--- a/solution.py
++++ b/solution.py
+@@ -11,7 +11,6 @@
+ import torch
+ import torch.nn as nn
+ from safetensors.torch import load_file, save_file
+-from transformers import AutoModelForCausalLM, BitsAndBytesConfig
+ 
+ MODEL_ID = "Qwen/Qwen3-4B"
+ EMBED_GROUP_SIZE = 128
+@@ -165,6 +164,7 @@
+ 
+ def load_model(device: str | torch.device = "cuda") -> nn.Module:
+     global _COMPRESSED_SIZE_BYTES
++    from transformers import AutoModelForCausalLM, BitsAndBytesConfig
+ 
+     bnb_config = BitsAndBytesConfig(
+         load_in_4bit=True,
+
+ succeeded in 940ms:
+..                                                                       [100%]
+2 passed in 0.58s
+
+exec
+/usr/bin/zsh -lc 'nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader' in /tmp/crucible_0z3zkbcf
+ succeeded in 0ms:
+NVIDIA GeForce RTX 3090, 24576 MiB, 595.45.04
+
+diff --git a/solution.py b/solution.py
+index 29dd67c4226333b113378a9f2457dc52f1b7a02f..3801ade612ebe00a03e155b60c9d0d21529e6fd1
+--- a/solution.py
++++ b/solution.py
+@@ -11,7 +11,6 @@
+ import torch
+ import torch.nn as nn
+ from safetensors.torch import load_file, save_file
+-from transformers import AutoModelForCausalLM, BitsAndBytesConfig
+ 
+ MODEL_ID = "Qwen/Qwen3-4B"
+ EMBED_GROUP_SIZE = 128
+@@ -165,6 +164,7 @@
+ 
+ def load_model(device: str | torch.device = "cuda") -> nn.Module:
+     global _COMPRESSED_SIZE_BYTES
++    from transformers import AutoModelForCausalLM, BitsAndBytesConfig
+ 
+     bnb_config = BitsAndBytesConfig(
+         load_in_4bit=True,
+
+exec
+/usr/bin/zsh -lc "uv run python - <<'PY'
+import solution
+print(solution.get_compressed_size())
+print(round(8_044_936_192/solution.get_compressed_size(),4))
+PY" in /tmp/crucible_0z3zkbcf
+diff --git a/solution.py b/solution.py
+index 29dd67c4226333b113378a9f2457dc52f1b7a02f..3801ade612ebe00a03e155b60c9d0d21529e6fd1
+--- a/solution.py
++++ b/solution.py
+@@ -11,7 +11,6 @@
+ import torch
+ import torch.nn as nn
+ from safetensors.torch import load_file, save_file
+-from transformers import AutoModelForCausalLM, BitsAndBytesConfig
+ 
+ MODEL_ID = "Qwen/Qwen3-4B"
+ EMBED_GROUP_SIZE = 128
+@@ -165,6 +164,7 @@
+ 
+ def load_model(device: str | torch.device = "cuda") -> nn.Module:
+     global _COMPRESSED_SIZE_BYTES
++    from transformers import AutoModelForCausalLM, BitsAndBytesConfig
+ 
+     bnb_config = BitsAndBytesConfig(
+         load_in_4bit=True,
+
+ succeeded in 699ms:
+1892681600
+4.2505
+
+codex
+I’ve confirmed the computed compressed size is ~1.89 GB (~4.25x). I’ll now run a full runtime smoke test that loads the model, builds/loads INT4 tables, and executes one forward pass on GPU.
+exec
+/usr/bin/zsh -lc "uv run python - <<'PY'
+import torch
+import solution
+
+model = solution.load_model(device='cuda:0')
+ids = torch.tensor([[151643, 198, 151645]], device='cuda:0', dtype=torch.long)
+with torch.no_grad():
+    out = model(ids)
+logits = out.logits if hasattr(out, 'logits') else out
+print(tuple(logits.shape))
+print('compressed_bytes', solution.get_compressed_size())
+PY" in /tmp/crucible_0z3zkbcf
+diff --git a/solution.py b/solution.py
+index 29dd67c4226333b113378a9f2457dc52f1b7a02f..3801ade612ebe00a03e155b60c9d0d21529e6fd1
+--- a/solution.py
++++ b/solution.py
+@@ -11,7 +11,6 @@
+ import torch
+ import torch.nn as nn
+ from safetensors.torch import load_file, save_file
+-from transformers import AutoModelForCausalLM, BitsAndBytesConfig
+ 
+ MODEL_ID = "Qwen/Qwen3-4B"
+ EMBED_GROUP_SIZE = 128
+@@ -165,6 +164,7 @@
+ 
+ def load_model(device: str | torch.device = "cuda") -> nn.Module:
+     global _COMPRESSED_SIZE_BYTES
++    from transformers import AutoModelForCausalLM, BitsAndBytesConfig
+ 
+     bnb_config = BitsAndBytesConfig(
+         load_in_4bit=True,
+
+ exited 1 in 2554ms:
+`torch_dtype` is deprecated! Use `dtype` instead!
+Traceback (most recent call last):
+  File "<stdin>", line 4, in <module>
+  File "/tmp/crucible_0z3zkbcf/solution.py", line 176, in load_model
+    model = AutoModelForCausalLM.from_pretrained(
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/crucible_0z3zkbcf/.venv/lib/python3.11/site-packages/transformers/models/auto/auto_factory.py", line 381, in from_pretrained
+    return model_class.from_pretrained(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/crucible_0z3zkbcf/.venv/lib/python3.11/site-packages/transformers/modeling_utils.py", line 3993, in from_pretrained
+    device_map = check_and_set_device_map(device_map)  # warn, error and fix the device map
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/crucible_0z3zkbcf/.venv/lib/python3.11/site-packages/transformers/integrations/accelerate.py", line 134, in check_and_set_device_map
+    raise ValueError(
+ValueError: Using a `device_map`, `tp_plan`, `torch.device` context manager or setting `torch.set_default_device(device)` requires `accelerate`. You can install it with `pip install accelerate`
+
+exec
+/usr/bin/zsh -lc 'uv pip install accelerate' in /tmp/crucible_0z3zkbcf
+diff --git a/solution.py b/solution.py
+index 29dd67c4226333b113378a9f2457dc52f1b7a02f..3801ade612ebe00a03e155b60c9d0d21529e6fd1
+--- a/solution.py
++++ b/solution.py
+@@ -11,7 +11,6 @@
+ import torch
+ import torch.nn as nn
+ from safetensors.torch import load_file, save_file
+-from transformers import AutoModelForCausalLM, BitsAndBytesConfig
+ 
+ MODEL_ID = "Qwen/Qwen3-4B"
+ EMBED_GROUP_SIZE = 128
+@@ -165,6 +164,7 @@
+ 
+ def load_model(device: str | torch.device = "cuda") -> nn.Module:
+     global _COMPRESSED_SIZE_BYTES
++    from transformers import AutoModelForCausalLM, BitsAndBytesConfig
+ 
+     bnb_config = BitsAndBytesConfig(
+         load_in_4bit=True,
+
+ succeeded in 122ms:
+Resolved 52 packages in 138ms
+Installed 2 packages in 2ms
+ + accelerate==1.13.0
+ + psutil==7.2.2
+
+apply patch
+patch: completed
+/tmp/crucible_0z3zkbcf/solution.py
+diff --git a/solution.py b/solution.py
+index 29dd67c4226333b113378a9f2457dc52f1b7a02f..322bafcdd9d9f633146667348a88572de5bfc0be
+--- a/solution.py
++++ b/solution.py
+@@ -11,7 +11,6 @@
+ import torch
+ import torch.nn as nn
+ from safetensors.torch import load_file, save_file
+-from transformers import AutoModelForCausalLM, BitsAndBytesConfig
+ 
+ MODEL_ID = "Qwen/Qwen3-4B"
+ EMBED_GROUP_SIZE = 128
+@@ -165,6 +164,7 @@
+ 
+ def load_model(device: str | torch.device = "cuda") -> nn.Module:
+     global _COMPRESSED_SIZE_BYTES
++    from transformers import AutoModelForCausalLM, BitsAndBytesConfig
+ 
+     bnb_config = BitsAndBytesConfig(
+         load_in_4bit=True,
+@@ -177,7 +177,7 @@
+         MODEL_ID,
+         quantization_config=bnb_config,
+         device_map=device,
+-        torch_dtype=torch.float16,
++        dtype=torch.float16,
+         low_cpu_mem_usage=True,
+     )
+     model.eval()
+
+diff --git a/solution.py b/solution.py
+index 29dd67c4226333b113378a9f2457dc52f1b7a02f..322bafcdd9d9f633146667348a88572de5bfc0be
+--- a/solution.py
++++ b/solution.py
+@@ -11,7 +11,6 @@
+ import torch
+ import torch.nn as nn
+ from safetensors.torch import load_file, save_file
+-from transformers import AutoModelForCausalLM, BitsAndBytesConfig
+ 
+ MODEL_ID = "Qwen/Qwen3-4B"
+ EMBED_GROUP_SIZE = 128
+@@ -165,6 +164,7 @@
+ 
+ def load_model(device: str | torch.device = "cuda") -> nn.Module:
+     global _COMPRESSED_SIZE_BYTES
++    from transformers import AutoModelForCausalLM, BitsAndBytesConfig
+ 
+     bnb_config = BitsAndBytesConfig(
+         load_in_4bit=True,
+@@ -177,7 +177,7 @@
+         MODEL_ID,
+         quantization_config=bnb_config,
+         device_map=device,
+-        torch_dtype=torch.float16,
++        dtype=torch.float16,
+         low_cpu_mem_usage=True,
+     )
+     model.eval()
+
+exec
+/usr/bin/zsh -lc 'uv run ruff check . --fix && uv run pytest -q' in /tmp/crucible_0z3zkbcf
+diff --git a/solution.py b/solution.py
+index 29dd67c4226333b113378a9f2457dc52f1b7a02f..322bafcdd9d9f633146667348a88572de5bfc0be
+--- a/solution.py
++++ b/solution.py
+@@ -11,7 +11,6 @@
+ import torch
+ import torch.nn as nn
+ from safetensors.torch import load_file, save_file
+-from transformers import AutoModelForCausalLM, BitsAndBytesConfig
+ 
+ MODEL_ID = "Qwen/Qwen3-4B"
+ EMBED_GROUP_SIZE = 128
+@@ -165,6 +164,7 @@
+ 
+ def load_model(device: str | torch.device = "cuda") -> nn.Module:
+     global _COMPRESSED_SIZE_BYTES
++    from transformers import AutoModelForCausalLM, BitsAndBytesConfig
+ 
+     bnb_config = BitsAndBytesConfig(
+         load_in_4bit=True,
+@@ -177,7 +177,7 @@
+         MODEL_ID,
+         quantization_config=bnb_config,
+         device_map=device,
+-        torch_dtype=torch.float16,
++        dtype=torch.float16,
+         low_cpu_mem_usage=True,
+     )
+     model.eval()
+
+ succeeded in 1006ms:
+..                                                                       [100%]
+2 passed in 0.56s
+
+exec
+/usr/bin/zsh -lc "uv run python - <<'PY'
+import torch
+import solution
+
+model = solution.load_model(device='cuda:0')
+ids = torch.tensor([[151643, 198, 151645]], device='cuda:0', dtype=torch.long)
+with torch.no_grad():
+    out = model(ids)
+logits = out.logits if hasattr(out, 'logits') else out
+print(tuple(logits.shape))
+print('compressed_bytes', solution.get_compressed_size())
+PY" in /tmp/crucible_0z3zkbcf
+diff --git a/solution.py b/solution.py
+index 29dd67c4226333b113378a9f2457dc52f1b7a02f..322bafcdd9d9f633146667348a88572de5bfc0be
+--- a/solution.py
++++ b/solution.py
+@@ -11,7 +11,6 @@
+ import torch
+ import torch.nn as nn
+ from safetensors.torch import load_file, save_file
+-from transformers import AutoModelForCausalLM, BitsAndBytesConfig
+ 
+ MODEL_ID = "Qwen/Qwen3-4B"
+ EMBED_GROUP_SIZE = 128
+@@ -165,6 +164,7 @@
+ 
+ def load_model(device: str | torch.device = "cuda") -> nn.Module:
+     global _COMPRESSED_SIZE_BYTES
++    from transformers import AutoModelForCausalLM, BitsAndBytesConfig
+ 
+     bnb_config = BitsAndBytesConfig(
+         load_in_4bit=True,
+@@ -177,7 +177,7 @@
+         MODEL_ID,
+         quantization_config=bnb_config,
+         device_map=device,
+-        torch_dtype=torch.float16,
++        dtype=torch.float16,
+         low_cpu_mem_usage=True,
+     )
+     model.eval()
+
+ succeeded in 8581ms:
+
+Loading weights:   0%|          | 0/398 [00:00<?, ?it/s]
+Loading weights:   0%|          | 1/398 [00:00<00:52,  7.55it/s]/tmp/crucible_0z3zkbcf/.venv/lib/python3.11/site-packages/bitsandbytes/backends/cuda/ops.py:213: FutureWarning: _check_is_size will be removed in a future PyTorch release along with guard_size_oblivious.     Use _check(i >= 0) instead.
+  torch._check_is_size(blocksize)
+
+Loading weights:   3%|▎         | 11/398 [00:00<00:07, 54.54it/s]
+Loading weights:   7%|▋         | 26/398 [00:00<00:04, 91.79it/s]
+Loading weights:  10%|█         | 41/398 [00:00<00:03, 113.08it/s]
+Loading weights:  15%|█▍        | 59/398 [00:00<00:02, 134.94it/s]
+Loading weights:  19%|█▉        | 76/398 [00:00<00:02, 146.25it/s]
+Loading weights:  23%|██▎       | 91/398 [00:00<00:02, 145.38it/s]
+Loading weights:  27%|██▋       | 106/398 [00:00<00:02, 142.25it/s]
+Loading weights:  31%|███       | 124/398 [00:00<00:01, 151.15it/s]
+Loading weights:  36%|███▌      | 143/398 [00:01<00:01, 161.40it/s]
+Loading weights:  40%|████      | 160/398 [00:01<00:01, 129.82it/s]
+Loading weights:  45%|████▍     | 179/398 [00:01<00:01, 144.48it/s]
+Loading weights:  49%|████▉     | 196/398 [00:01<00:01, 148.49it/s]
+Loading weights:  53%|█████▎    | 212/398 [00:01<00:01, 148.61it/s]
+Loading weights:  57%|█████▋    | 228/398 [00:01<00:01, 148.19it/s]
+Loading weights:  62%|██████▏   | 246/398 [00:01<00:00, 155.13it/s]
+Loading weights:  66%|██████▌   | 263/398 [00:01<00:00, 158.93it/s]
+Loading weights:  70%|███████   | 280/398 [00:02<00:00, 153.28it/s]
+Loading weights:  75%|███████▍  | 298/398 [00:02<00:00, 159.52it/s]
+Loading weights:  79%|███████▉  | 315/398 [00:02<00:00, 158.42it/s]
+Loading weights:  83%|████████▎ | 331/398 [00:02<00:00, 157.76it/s]
+Loading weights:  87%|████████▋ | 347/398 [00:02<00:00, 152.79it/s]
+Loading weights:  92%|█████████▏| 366/398 [00:02<00:00, 160.49it/s]
+Loading weights:  96%|█████████▌| 383/398 [00:02<00:00, 159.12it/s]
+Loading weights: 100%|██████████| 398/398 [00:02<00:00, 145.06it/s]
+(1, 3, 151936)
+compressed_bytes 1892681600
+
+codex
+`load_model()` and a forward pass succeeded on the RTX 3090. I’m running full `_evaluate.py` now to verify sequential loading, perplexity, and fitness output end-to-end.
+exec
+/usr/bin/zsh -lc 'uv run python _evaluate.py' in /tmp/crucible_0z3zkbcf
+diff --git a/solution.py b/solution.py
+index 29dd67c4226333b113378a9f2457dc52f1b7a02f..322bafcdd9d9f633146667348a88572de5bfc0be
+--- a/solution.py
++++ b/solution.py
+@@ -11,7 +11,6 @@
+ import torch
+ import torch.nn as nn
+ from safetensors.torch import load_file, save_file
+-from transformers import AutoModelForCausalLM, BitsAndBytesConfig
+ 
+ MODEL_ID = "Qwen/Qwen3-4B"
+ EMBED_GROUP_SIZE = 128
+@@ -165,6 +164,7 @@
+ 
+ def load_model(device: str | torch.device = "cuda") -> nn.Module:
+     global _COMPRESSED_SIZE_BYTES
++    from transformers import AutoModelForCausalLM, BitsAndBytesConfig
+ 
+     bnb_config = BitsAndBytesConfig(
+         load_in_4bit=True,
+@@ -177,7 +177,7 @@
+         MODEL_ID,
+         quantization_config=bnb_config,
+         device_map=device,
+-        torch_dtype=torch.float16,
++        dtype=torch.float16,
+         low_cpu_mem_usage=True,
+     )
+     model.eval()
+
+ succeeded in 10478ms:
+
+Loading weights:   0%|          | 0/398 [00:00<?, ?it/s]
+Loading weights:   0%|          | 1/398 [00:00<00:47,  8.41it/s]
+Loading weights:  13%|█▎        | 53/398 [00:00<00:01, 285.90it/s]
+Loading weights:  23%|██▎       | 92/398 [00:00<00:00, 329.64it/s]
+Loading weights:  33%|███▎      | 132/398 [00:00<00:00, 355.25it/s]
+Loading weights:  44%|████▍     | 176/398 [00:00<00:00, 381.07it/s]
+Loading weights:  54%|█████▍    | 215/398 [00:00<00:00, 377.70it/s]
+Loading weights:  65%|██████▍   | 257/398 [00:00<00:00, 385.61it/s]
+Loading weights:  76%|███████▌  | 301/398 [00:00<00:00, 398.70it/s]
+Loading weights:  86%|████████▋ | 344/398 [00:00<00:00, 403.02it/s]
+Loading weights:  98%|█████████▊| 389/398 [00:01<00:00, 413.58it/s]
+Loading weights: 100%|██████████| 398/398 [00:01<00:00, 378.61it/s]
+
+Loading weights:   0%|          | 0/398 [00:00<?, ?it/s]
+Loading weights:   0%|          | 1/398 [00:00<00:47,  8.33it/s]/tmp/crucible_0z3zkbcf/.venv/lib/python3.11/site-packages/bitsandbytes/backends/cuda/ops.py:213: FutureWarning: _check_is_size will be removed in a future PyTorch release along with guard_size_oblivious.     Use _check(i >= 0) instead.
+  torch._check_is_size(blocksize)
+
+Loading weights:   4%|▍         | 15/398 [00:00<00:05, 74.76it/s]
+Loading weights:   9%|▉         | 36/398 [00:00<00:02, 128.53it/s]
+Loading weights:  14%|█▍        | 56/398 [00:00<00:02, 154.56it/s]
+Loading weights:  18%|█▊        | 72/398 [00:00<00:02, 153.84it/s]
+Loading weights:  23%|██▎       | 92/398 [00:00<00:01, 164.91it/s]
+Loading weights:  28%|██▊       | 113/398 [00:00<00:01, 176.55it/s]
+Loading weights:  33%|███▎      | 132/398 [00:00<00:01, 179.09it/s]
+Loading weights:  38%|███▊      | 150/398 [00:00<00:01, 174.30it/s]
+Loading weights:  42%|████▏     | 169/398 [00:01<00:01, 177.30it/s]
+Loading weights:  48%|████▊     | 190/398 [00:01<00:01, 184.07it/s]
+Loading weights:  53%|█████▎    | 209/398 [00:01<00:01, 184.06it/s]
+Loading weights:  57%|█████▋    | 228/398 [00:01<00:00, 183.60it/s]
+Loading weights:  62%|██████▏   | 247/398 [00:01<00:00, 176.87it/s]
+Loading weights:  68%|██████▊   | 269/398 [00:01<00:00, 184.13it/s]
+Loading weights:  73%|███████▎  | 289/398 [00:01<00:00, 187.60it/s]
+Loading weights:  78%|███████▊  | 309/398 [00:01<00:00, 189.99it/s]
+Loading weights:  83%|████████▎ | 329/398 [00:01<00:00, 189.72it/s]
+Loading weights:  87%|████████▋ | 348/398 [00:02<00:00, 185.39it/s]
+Loading weights:  92%|█████████▏| 367/398 [00:02<00:00, 185.80it/s]
+Loading weights:  97%|█████████▋| 388/398 [00:02<00:00, 188.19it/s]
+Loading weights: 100%|██████████| 398/398 [00:02<00:00, 173.74it/s]
+{"fitness": 1.876071, "quality": 0.898653, "compression_ratio": 4.2505, "ref_ppl": 5.7232, "sol_ppl": 6.3348, "delta_ppl_pct": 10.69, "ref_bytes": 8044936192, "sol_bytes": 1892681600, "eval_tokens": 1591}
+
+codex
+End-to-end evaluation succeeded with valid JSON output. I’m doing a quick diff check and then I’ll report the final results and what was changed.
+exec
+/usr/bin/zsh -lc 'git status --short && ls -lh solution.py tests/test_solution.py tests/conftest.py .quant_cache/qwen3_4b_embed_int4.safetensors' in /tmp/crucible_0z3zkbcf
+ succeeded in 0ms:
+?? .quant_cache/
+?? __pycache__/
+?? _evaluate.py
+?? prior_best.py
+?? reference.py
+?? solution.py
+?? tests/
+-rw-rw-r-- 1 infatoshi infatoshi 192M Apr  1 10:59 .quant_cache/qwen3_4b_embed_int4.safetensors
+-rw-rw-r-- 1 infatoshi infatoshi 7.4K Apr  1 10:59 solution.py
+-rw-rw-r-- 1 infatoshi infatoshi  144 Apr  1 10:57 tests/conftest.py
+-rw-rw-r-- 1 infatoshi infatoshi  694 Apr  1 10:57 tests/test_solution.py
+
+diff --git a/solution.py b/solution.py
+index 29dd67c4226333b113378a9f2457dc52f1b7a02f..322bafcdd9d9f633146667348a88572de5bfc0be
+--- a/solution.py
++++ b/solution.py
+@@ -11,7 +11,6 @@
+ import torch
+ import torch.nn as nn
+ from safetensors.torch import load_file, save_file
+-from transformers import AutoModelForCausalLM, BitsAndBytesConfig
+ 
+ MODEL_ID = "Qwen/Qwen3-4B"
+ EMBED_GROUP_SIZE = 128
+@@ -165,6 +164,7 @@
+ 
+ def load_model(device: str | torch.device = "cuda") -> nn.Module:
+     global _COMPRESSED_SIZE_BYTES
++    from transformers import AutoModelForCausalLM, BitsAndBytesConfig
+ 
+     bnb_config = BitsAndBytesConfig(
+         load_in_4bit=True,
+@@ -177,7 +177,7 @@
+         MODEL_ID,
+         quantization_config=bnb_config,
+         device_map=device,
+-        torch_dtype=torch.float16,
++        dtype=torch.float16,
+         low_cpu_mem_usage=True,
+     )
+     model.eval()
+
+codex
+Implemented a working `solution.py` for Qwen3-4B quantization and validated it end-to-end.
+
+### What I changed
+- Added quantized solution at [solution.py](/tmp/crucible_0z3zkbcf/solution.py):
+  - NF4 (`bitsandbytes`) for transformer linear layers.
+  - Custom symmetric INT4 (per-group scales) for `embed_tokens` and `lm_head`.
+  - Shared INT4 table for embedding/lm_head to reduce storage.
+  - On-disk cache generation/loading for INT4 table at `.quant_cache/qwen3_4b_embed_int4.safetensors`.
+  - Honest compressed-size reporting via `get_compressed_size()`.
+- Added tests:
+  - [tests/test_solution.py](/tmp/crucible_0z3zkbcf/tests/test_solution.py)
+  - [tests/conftest.py](/tmp/crucible_0z3zkbcf/tests/conftest.py)
+
+### Required checks run
+- `uv run ruff check . --fix` passed.
+- `uv run pytest -q` passed (`2 passed`).
+- `uv run python _evaluate.py` passed and produced valid JSON.
+
+### Evaluation result
+```json
+{"fitness": 1.876071, "quality": 0.898653, "compression_ratio": 4.2505, "ref_ppl": 5.7232, "sol_ppl": 6.3348, "delta_ppl_pct": 10.69, "ref_bytes": 8044936192, "sol_bytes": 1892681600, "eval_tokens": 1591}
+```
+
+Compressed size reported: `1,892,681,600` bytes (< `8,044,936,192`), ratio `4.2505x`.
+diff --git a/solution.py b/solution.py
+index 29dd67c4226333b113378a9f2457dc52f1b7a02f..322bafcdd9d9f633146667348a88572de5bfc0be
+--- a/solution.py
++++ b/solution.py
+@@ -11,7 +11,6 @@
+ import torch
+ import torch.nn as nn
+ from safetensors.torch import load_file, save_file
+-from transformers import AutoModelForCausalLM, BitsAndBytesConfig
+ 
+ MODEL_ID = "Qwen/Qwen3-4B"
+ EMBED_GROUP_SIZE = 128
+@@ -165,6 +164,7 @@
+ 
+ def load_model(device: str | torch.device = "cuda") -> nn.Module:
+     global _COMPRESSED_SIZE_BYTES
++    from transformers import AutoModelForCausalLM, BitsAndBytesConfig
+ 
+     bnb_config = BitsAndBytesConfig(
+         load_in_4bit=True,
+@@ -177,7 +177,7 @@
+         MODEL_ID,
+         quantization_config=bnb_config,
+         device_map=device,
+-        torch_dtype=torch.float16,
++        dtype=torch.float16,
+         low_cpu_mem_usage=True,
+     )
+     model.eval()
+
+tokens used
+71,915

@@ -1,0 +1,27 @@
+Implemented and validated a stronger `solution.py` that beats the prior best score.
+
+**Result**
+- `_evaluate.py` output:
+  - `fitness`: `1.900605` (beats `1.8980`)
+  - `quality`: `0.923951`
+  - `compression_ratio`: `4.1613`
+  - `sol_bytes`: `1,933,266,816`
+
+**What I changed**
+- Added full tournament solution in [solution.py](/tmp/crucible_t2hs4i4p/solution.py):
+  - AWQ 4-bit transformer linears.
+  - Asymmetric INT4 grouped quantization for shared embedding/LM-head weights.
+  - Outlier residual channels (fp16) for quality recovery.
+  - Honest compressed-size accounting.
+  - Auto-build of local AWQ checkpoint (`qwen3-4b-awq`) when missing, using calibration text.
+- Added tests in [test_solution.py](/tmp/crucible_t2hs4i4p/test_solution.py):
+  - nibble pack/unpack roundtrip.
+  - quant/dequant shape+error checks.
+  - compressed-size validity constraints.
+
+**Verification run**
+- `uv run ruff check . --fix` passed.
+- `uv run pytest -q` passed (`3 passed`).
+- `uv run python _evaluate.py` produced valid JSON with fitness above target.
+
+

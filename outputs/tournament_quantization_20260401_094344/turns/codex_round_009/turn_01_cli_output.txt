@@ -1,0 +1,20 @@
+Implemented a stronger `solution.py` by starting from `prior_best.py` and tightening compression without hurting quality.
+
+- Change made: set `MAX_EXACT_TOKENS = 0` in [solution.py](/tmp/crucible_fnhlgje2/solution.py:23), removing fp16 exact-token cache overhead while keeping AWQ + shared INT4 embedding/lm-head path.
+- Rationale: this improves compression ratio enough to raise fitness, while perplexity remains better than reference (`quality` still capped at `1.0`).
+
+Validation run results (`uv run python _evaluate.py`):
+- `fitness`: **2.077365**
+- `quality`: **1.0**
+- `compression_ratio`: **4.2204**
+- `ref_ppl`: `5.7232`
+- `sol_ppl`: `5.5553` (and `5.5555` in repeat run)
+- `sol_bytes`: `1,906,222,080`
+
+This beats the stated best (`2.0742`).
+
+Required checks run:
+- `uv run python -c "import reference; import json; print(json.dumps(reference.get_model_config(), indent=2))"`: passed
+- `uv run ruff check . --fix`: passed
+- `uv run pytest`: no tests present (`collected 0 items`)
+- `uv run python _evaluate.py`: passed with valid JSON output above

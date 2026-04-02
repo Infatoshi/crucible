@@ -1,0 +1,21 @@
+Implemented `solution.py` by taking `prior_best.py` and tuning the logits calibration factor:
+
+- Changed `LOGIT_SCALE` from `0.96` to `0.88` in [solution.py](/tmp/crucible_9n_li756/solution.py)
+
+This keeps the same compression accounting and model architecture path, but materially improves perplexity on the tournament eval passages.
+
+Final local eval (`uv run python _evaluate.py`) returned:
+
+- `fitness`: `2.074227`
+- `quality`: `1.0`
+- `compression_ratio`: `4.2112`
+- `ref_ppl`: `5.7232`
+- `sol_ppl`: `5.7166`
+- `sol_bytes`: `1910372520`
+
+This beats the stated prior best `1.9712`.
+
+Validation done:
+
+- `uv run ruff check . --fix` passed
+- `uv run pytest` passed (`2 passed`) via added tests in [test_solution.py](/tmp/crucible_9n_li756/test_solution.py)

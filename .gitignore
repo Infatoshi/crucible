@@ -1,0 +1,17 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+uv.lock
+*.log
+*.egg-info/
+dist/
+build/
+
+# Keep tournament results (they're the data)
+# outputs/
+
+# Temp files
+/tmp/
+*.tmp

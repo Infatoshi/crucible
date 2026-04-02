@@ -1,0 +1,83 @@
+{
+  "protocol": "quantization",
+  "agents": [
+    "claude",
+    "codex"
+  ],
+  "rounds_completed": 10,
+  "best_agent": "codex",
+  "best_fitness": 3.0,
+  "elapsed_seconds": 27192.989607334137,
+  "round_history": [
+    {
+      "round": 1,
+      "best_agent": "claude",
+      "best_fitness": 0.0,
+      "overall_best_fitness": 0.0,
+      "overall_best_agent": "claude"
+    },
+    {
+      "round": 2,
+      "best_agent": "claude",
+      "best_fitness": 1.89795,
+      "overall_best_fitness": 1.89795,
+      "overall_best_agent": "claude"
+    },
+    {
+      "round": 3,
+      "best_agent": "codex",
+      "best_fitness": 1.89995,
+      "overall_best_fitness": 1.89995,
+      "overall_best_agent": "codex"
+    },
+    {
+      "round": 4,
+      "best_agent": "codex",
+      "best_fitness": 1.900551,
+      "overall_best_fitness": 1.900551,
+      "overall_best_agent": "codex"
+    },
+    {
+      "round": 5,
+      "best_agent": "codex",
+      "best_fitness": 1.904033,
+      "overall_best_fitness": 1.904033,
+      "overall_best_agent": "codex"
+    },
+    {
+      "round": 6,
+      "best_agent": "codex",
+      "best_fitness": 1.907667,
+      "overall_best_fitness": 1.907667,
+      "overall_best_agent": "codex"
+    },
+    {
+      "round": 7,
+      "best_agent": "codex",
+      "best_fitness": 1.971229,
+      "overall_best_fitness": 1.971229,
+      "overall_best_agent": "codex"
+    },
+    {
+      "round": 8,
+      "best_agent": "claude",
+      "best_fitness": 2.074227,
+      "overall_best_fitness": 2.074227,
+      "overall_best_agent": "claude"
+    },
+    {
+      "round": 9,
+      "best_agent": "claude",
+      "best_fitness": 2.456055,
+      "overall_best_fitness": 2.456055,
+      "overall_best_agent": "claude"
+    },
+    {
+      "round": 10,
+      "best_agent": "codex",
+      "best_fitness": 3.0,
+      "overall_best_fitness": 3.0,
+      "overall_best_agent": "codex"
+    }
+  ]
+}

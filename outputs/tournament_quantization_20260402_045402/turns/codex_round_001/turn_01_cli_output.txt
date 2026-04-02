@@ -1,0 +1,24 @@
+Implemented a 4-bit NF4 quantization solution for `Qwen/Qwen3-4B` in [solution.py](/tmp/crucible_lwc15blm/solution.py), with evaluator-compatible API:
+
+- `load_model(device="cuda")` loads quantized model via bitsandbytes and returns a causal LM model.
+- `get_compressed_size()` returns an honest byte count computed from unique tensor storages in:
+  - model parameters
+  - model buffers
+  - bitsandbytes quantization state tensors (e.g. scales/metadata)
+
+Added tests in [test_solution.py](/tmp/crucible_lwc15blm/test_solution.py):
+
+- Verifies `get_compressed_size()` errors if called before `load_model`.
+- Mocks HF load to verify quant config (`4bit`, `nf4`) and checks exact byte accounting behavior.
+
+Requested analysis step completed:
+- `reference.get_model_config()` output confirmed:
+  - hidden `2560`, layers `36`, heads `32`, kv heads `8`, intermediate `9728`, vocab `151936`, context `40960`, fp16 bytes `8044936192`.
+
+Validation run:
+- `uv run ruff check . --fix` passed
+- `uv run pytest -q` passed (`2 passed`)
+
+Notes:
+- I did not run `_evaluate.py` (hidden eval texts required, as expected).
+- I also did not execute a full real `load_model()` download/quantization pass in this environment, so the runtime path is validated by unit tests/mocking rather than end-to-end model fetch.

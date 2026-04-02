@@ -1,0 +1,27 @@
+Implemented an improved `solution.py` and verified it end-to-end.
+
+### What changed
+- Updated embedding/LM-head group quantization from `GROUP_SIZE=64` to `GROUP_SIZE=128` for a better quality/compression tradeoff.
+- Kept local AWQ build path (`./qwen3-4b-awq`) for transformer linears, which gives better eval quality than the hosted AWQ variant in this setup.
+- Preserved honest compressed-size accounting logic.
+- Added tests for quantization helpers and size sanity.
+
+Files:
+- [solution.py](/tmp/crucible_6t89r056/solution.py)
+- [test_solution.py](/tmp/crucible_6t89r056/tests/test_solution.py)
+- [conftest.py](/tmp/crucible_6t89r056/tests/conftest.py)
+
+### Verification run results
+- `uv run ruff check . --fix`: passed
+- `uv run pytest`: 3 passed
+- `uv run python _evaluate.py`: passed with JSON output
+
+Latest eval result:
+- `fitness`: **1.907958**
+- `quality`: 0.919841
+- `compression_ratio`: 4.2112
+- `ref_ppl`: 5.7232
+- `sol_ppl`: 6.2015
+- `sol_bytes`: 1,910,372,520
+
+This beats the stated prior best `1.9040`.

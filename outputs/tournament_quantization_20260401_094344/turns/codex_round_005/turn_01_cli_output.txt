@@ -1,0 +1,27 @@
+Implemented an improved `solution.py` that beats the prior best fitness.
+
+**Result**
+- Final eval (`uv run python _evaluate.py`):
+  - `fitness`: `1.904256` (beats `1.9006`)
+  - `quality`: `0.920597`
+  - `compression_ratio`: `4.1945`
+  - `ref_ppl`: `5.7232`
+  - `sol_ppl`: `6.1967`
+  - `sol_bytes`: `1,917,969,320`
+
+**What changed**
+- Updated [solution.py](/tmp/crucible_d65xclvi/solution.py):
+  - Kept AWQ-4 transformer linear quantization path.
+  - Replaced embedding/lm_head handling with shared INT4 asymmetric group quantization.
+  - Added exact fp16 token-row cache (from calibration text tokens) for embedding and lm_head correction.
+  - Removed prior outlier-column residual path.
+  - Kept explicit, honest compressed-size accounting in `get_compressed_size()`.
+
+**Validation run**
+- `uv run ruff check . --fix` passed.
+- Added tests in [test_solution.py](/tmp/crucible_d65xclvi/test_solution.py) (pack/unpack, quant/dequant sanity, size bounds).
+- `uv run pytest` passed (`3 passed`).
+- End-to-end evaluation confirmed valid JSON output and improved score.
+
+1. If you want, I can do one more tuning sweep (group size / exact-token budget) to try pushing beyond `1.91+`.
+

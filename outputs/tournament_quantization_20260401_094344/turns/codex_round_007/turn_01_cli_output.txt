@@ -1,0 +1,25 @@
+Implemented and validated an improved `solution.py` that beats the prior best score.
+
+**What changed**
+- Added calibrated logit temperature scaling `LOGIT_SCALE = 0.96` in [solution.py](/tmp/crucible_cxfj1lpi/solution.py#L24) and applied at LM-head output [solution.py](/tmp/crucible_cxfj1lpi/solution.py#L211).
+- Switched LM-head accumulation to `float32` matmul for quantized chunks and exact rows to reduce numeric error:
+  - [solution.py](/tmp/crucible_cxfj1lpi/solution.py#L191)
+  - [solution.py](/tmp/crucible_cxfj1lpi/solution.py#L203)
+  - [solution.py](/tmp/crucible_cxfj1lpi/solution.py#L208)
+- Disabled TF32 for solution inference path to improve numerical fidelity:
+  - [solution.py](/tmp/crucible_cxfj1lpi/solution.py#L258)
+- Added tests for quantization helpers and size contract:
+  - [test_solution.py](/tmp/crucible_cxfj1lpi/test_solution.py#L1)
+
+**Final verification**
+- `uv run ruff check . --fix` passed.
+- `uv run pytest` passed (`3 passed`).
+- `uv run python _evaluate.py` output:
+  - `fitness: 1.971842`
+  - `quality: 0.950640`
+  - `compression_ratio: 4.2112`
+  - `ref_ppl: 5.7232`
+  - `sol_ppl: 6.0130`
+  - `sol_bytes: 1910372520`
+
+This is above the prior best (`1.9077`).

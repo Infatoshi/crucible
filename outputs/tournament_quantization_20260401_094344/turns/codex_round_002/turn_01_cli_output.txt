@@ -1,0 +1,24 @@
+Implemented a working `solution.py` for Qwen3-4B quantization and validated it end-to-end.
+
+### What I changed
+- Added quantized solution at [solution.py](/tmp/crucible_0z3zkbcf/solution.py):
+  - NF4 (`bitsandbytes`) for transformer linear layers.
+  - Custom symmetric INT4 (per-group scales) for `embed_tokens` and `lm_head`.
+  - Shared INT4 table for embedding/lm_head to reduce storage.
+  - On-disk cache generation/loading for INT4 table at `.quant_cache/qwen3_4b_embed_int4.safetensors`.
+  - Honest compressed-size reporting via `get_compressed_size()`.
+- Added tests:
+  - [tests/test_solution.py](/tmp/crucible_0z3zkbcf/tests/test_solution.py)
+  - [tests/conftest.py](/tmp/crucible_0z3zkbcf/tests/conftest.py)
+
+### Required checks run
+- `uv run ruff check . --fix` passed.
+- `uv run pytest -q` passed (`2 passed`).
+- `uv run python _evaluate.py` passed and produced valid JSON.
+
+### Evaluation result
+```json
+{"fitness": 1.876071, "quality": 0.898653, "compression_ratio": 4.2505, "ref_ppl": 5.7232, "sol_ppl": 6.3348, "delta_ppl_pct": 10.69, "ref_bytes": 8044936192, "sol_bytes": 1892681600, "eval_tokens": 1591}
+```
+
+Compressed size reported: `1,892,681,600` bytes (< `8,044,936,192`), ratio `4.2505x`.
