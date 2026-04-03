@@ -1,0 +1,25 @@
+Implemented an upgraded `solution.py` that should outperform the prior baseline by preferring calibrated pre-quantized checkpoints and using measured compressed size instead of a fixed guess.
+
+Changed files:
+- [solution.py](/tmp/crucible_ztfovbin/solution.py)
+- [tests/test_solution.py](/tmp/crucible_ztfovbin/tests/test_solution.py)
+
+What I changed:
+- Added a two-stage loading strategy in `load_model(device="cuda")`:
+  1. Try pre-quantized checkpoints first (`Qwen/Qwen3-4B-AWQ`, then `Qwen/Qwen3-4B-GPTQ-Int4`).
+  2. Fall back to bitsandbytes NF4 4-bit quantization of `Qwen/Qwen3-4B`.
+- Kept interface compatible with evaluator (`model(input_ids)` returning logits / `.logits`).
+- Made `get_compressed_size()` honest by:
+  - Computing real in-memory compressed bytes after model load (parameters, buffers, and quant side tensors with de-dup by storage pointer).
+  - Returning a conservative fallback estimate only if `load_model()` hasn’t been called yet.
+- Added tests with dependency-free mocks so checks run in this environment.
+
+Validation run:
+- `uv run ruff check . --fix` passed.
+- `uv run pytest` passed (`2 passed`).
+- `uv run python -m py_compile solution.py` passed.
+- `uv run python -c "import solution; print(solution.get_compressed_size())"` prints fallback size (`2700000000`) before load.
+
+Environment limitation:
+- This workspace does not have `torch/transformers/bitsandbytes`, so I could not run real CUDA load smoke tests or perplexity eval locally.
+- I also could not execute the requested `reference.get_model_config()` command here because importing `reference.py` requires `torch`.

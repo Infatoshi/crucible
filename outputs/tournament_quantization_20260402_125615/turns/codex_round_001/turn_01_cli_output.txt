@@ -1,0 +1,24 @@
+Implemented a tournament-ready `solution.py` with an honest compressed-size path and dependency-safe loading.
+
+### What I changed
+- Added [`solution.py`](/tmp/crucible_0ez5c7_f/solution.py):
+  - `load_model(device="cuda")`:
+    - Primary path: 4-bit NF4 + double quantization via `bitsandbytes` (`transformers` quant config).
+    - Persists quantized artifacts to `quantized_qwen3_4b/` and reuses them on later loads.
+    - Handles environments without `accelerate` by retrying without `device_map`.
+    - Falls back to pure PyTorch per-channel `int8` linear quantization if 4-bit path is unavailable.
+  - `get_compressed_size()`:
+    - Returns real on-disk bytes from saved quantized artifacts.
+    - Uses metadata cache and recomputes from directory if needed.
+- Added tests in [`tests/test_solution.py`](/tmp/crucible_0ez5c7_f/tests/test_solution.py) for:
+  - `Int8Linear` output shape/dtype compatibility.
+  - `get_compressed_size()` metadata path and directory-size path.
+
+### Verification run
+- `uv run --python .venv/bin/python ruff check . --fix` passed.
+- `uv run --python .venv/bin/python pytest -q` passed (`3 passed`).
+- Import smoke test passed:
+  - `uv run --python .venv/bin/python python -c "import solution; ..."`.
+
+### Note
+- Full `load_model()` with actual Qwen3-4B weights was not completed locally because it requires multi-GB model download/quantization runtime. The code path is wired for that and artifact-based size reporting is in place.
